@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pdf - 执行报告</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px;
+            color: #333;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+        }
+        h1 {
+            color: #1e293b;
+            margin-bottom: 20px;
+            font-size: 28px;
+        }
+        .content {
+            line-height: 1.8;
+            color: #475569;
+        }
+        .meta {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e2e8f0;
+            font-size: 12px;
+            color: #94a3b8;
+        }
+        pre {
+            background: #f8fafc;
+            padding: 16px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 16px 0;
+        }
+        code {
+            font-family: 'JetBrains Mono', Consolas, monospace;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>pdf - 执行报告</h1>
+        <div class="content">
+            
+            <h2>技能信息</h2>
+            <p><strong>名称:</strong> pdf</p>
+            <p><strong>描述:</strong> 从 ZIP 包导入的技能</p>
+
+            <h2>执行结果</h2>
+            <pre><code>{
+  "message": "AI 技能「pdf」执行完成",
+  "skill_type": "ai_prompt",
+  "content": "我来为您创建一个龙虾宣传海报的PDF文件。\n\n```python\nfrom reportlab.lib.pagesizes import A4\nfrom reportlab.pdfgen import canvas\nfrom reportlab.lib.colors import Color, HexColor\nfrom reportlab.pdfbase import pdfmetrics\nfrom reportlab.pdfbase.ttfonts import TTFont\nfrom reportlab.lib.units import cm\nimport os\n\n# 创建PDF\noutput_path = \"lobster_poster.pdf\"\nc = canvas.Canvas(output_path, pagesize=A4)\nwidth, height = A4\n\n# 定义颜色\ndeep_red = HexColor('#8B0000')\ngold = HexColor('#FFD700')\norange = HexColor('#FF6B35')\ncream = HexColor('#FFF8DC')\ndark_blue = HexColor('#1a3a5c')\n\n# 背景渐变效果 - 深蓝到深红\nfor i in range(int(height)):\n    ratio = i / height\n    r = int(26 + (139 - 26) * ratio)\n    g = int(58 + (0 - 58) * ratio)\n    b = int(92 + (0 - 92) * ratio)\n    c.setStrokeColor(Color(r/255, g/255, b/255))\n    c.setFillColor(Color(r/255, g/255, b/255))\n    c.line(0, i, width, i)\n\n# 装饰性边框\nc.setStrokeColor(gold)\nc.setLineWidth(3)\nc.roundRect(15, 15, width-30, height-30, 10, stroke=1, fill=0)\n\nc.setLineWidth(1.5)\nc.roundRect(25, 25, width-50, height-50, 8, stroke=1, fill=0)\n\n# 顶部装饰横条\nc.setFillColor(gold)\nc.rect(40, height-120, width-80, 3, fill=1, stroke=0)\n\n# 主标题区域\nc.setFillColor(gold)\nc.setFont(\"Helvetica-Bold\", 72)\nc.drawCentredString(width/2, height-180, \"LOBSTER\")\n\nc.setFont(\"Helvetica-Bold\", 36)\nc.drawCentredString(width/2, height-230, \"FRESH & DELICIOUS\")\n\n# 龙虾图标区域 (用文字和形状模拟)\nc.setFillColor(orange)\nc.setFont(\"Helvetica-Bold\", 120)\nc.drawCentredString(width/2, height-380, \"🦞\")\n\n# 特色文字\nc.setFillColor(cream)\nc.setFont(\"Helvetica-Bold\", 28)\nc.drawCentredString(width/2, height-480, \"Premium Quality\")\n\nc.setFont(\"Helvetica\", 18)\nc.drawCentredString(width/2, height-510, \"Freshly Caught • Sustainably Sourced\")\n\n# 分隔线\nc.setStrokeColor(gold)\nc.setLineWidth(2)\nc.line(100, height-540, width-100, height-540)\n\n# 特色卖点\nfeatures = [\n    \"🌊  Ocean Fresh Daily\",\n    \"🍽️  Premium Selection\", \n    \"👨‍🍳  Chef's Special Recipes\",\n    \"🚚  Fast Delivery Available\"\n]\n\nc.setFillColor(cream)\nc.setFont(\"Helvetica\", 20)\ny_pos = height - 590\nfor feature in features:\n    c.drawCentredString(width/2, y_pos, feature)\n    y_pos -= 35\n\n# 促销信息框\nc.setFillColor(orange)\nc.roundRect(80, 140, width-160, 100, 15, fill=1, stroke=0)\n\nc.setFillColor(HexColor('#FFFFFF'))\nc.setFont(\"Helvetica-Bold\", 32)\nc.drawCentredString(width/2, 205, \"SPECIAL OFFER\")\n\nc.setFont(\"Helvetica-Bold\", 24)\nc.drawCentredString(width/2, 165, \"20% OFF First Order!\")\n\n# 底部联系信息\nc.setFillColor(gold)\nc.setFont(\"Helvetica\", 14)\nc.drawCentredString(width/2, 100, \"Order Now: www.lobster-fresh.com\")\nc.drawCentredString(width/2, 80, \"Tel: 400-888-8888 | WeChat: LobsterFresh\")\n\n# 底部装饰横条\nc.rect(40, 55, width-80, 3, fill=1, stroke=0)\n\n# 角落装饰\ndef draw_corner_decoration(x, y, size, rotation):\n    c.saveState()\n    c.translate(x, y)\n    c.rotate(rotation)\n    c.setStrokeColor(gold)\n    c.setLineWidth(2)\n    c.line(0, 0, size, 0)\n    c.line(0, 0, 0, size)\n    c.restoreState()\n\ndraw_corner_decoration(35, height-35, 30, 0)\ndraw_corner_decoration(width-35, height-35, 30, -90)\ndraw_corner_decoration(35, 35, 30, 90)\ndraw_corner_decoration(width-35, 35, 30, 180)\n\n# 保存PDF\nc.save()\n\nprint(f\"海报已生成: {output_path}\")\nprint(f\"文件大小: {os.path.getsize(output_path)} bytes\")\n```\n\n我已经为您创建了一个精美的龙虾宣传海报PDF文件 `lobster_poster.pdf`，包含以下设计元素：\n\n**设计特点：**\n- 🎨 **渐变背景**：从深蓝到深红的渐变，营造海洋与美食的氛围\n- ✨ **金色边框**：双层圆角边框，增添高档感\n- 🦞 **醒目标题**：\"LOBSTER\" 大字配合 \"FRESH & DELICIOUS\" 副标题\n- 📋 **特色卖点**：\n  - 每日新鲜海捕\n  - 精选优质品种\n  - 大厨特色菜谱\n  - 快速配送服务\n- 🏷️ **促销信息**：橙色圆角框突出显示\"首单8折优惠\"\n- 📞 **联系方式**：网站、电话、微信一应俱全\n- 🔶 **装饰元素**：角落装饰和分隔线提升整体美感\n\n海报尺寸为A4标准尺寸，可直接打印使用！"
+}</code></pre><h2>执行输出</h2><pre><code>我来为您创建一个龙虾宣传海报的PDF文件。
+
+```python
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.lib.colors import Color, HexColor
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.units import cm
+import os
+
+# 创建PDF
+output_path = "lobster_poster.pdf"
+c = canvas.Canvas(output_path, pagesize=A4)
+width, height = A4
+
+# 定义颜色
+deep_red = HexColor('#8B0000')
+gold = HexColor('#FFD700')
+orange = HexColor('#FF6B35')
+cream = HexColor('#FFF8DC')
+dark_blue = HexColor('#1a3a5c')
+
+# 背景渐变效果 - 深蓝到深红
+for i in range(int(height)):
+    ratio = i / height
+    r = int(26 + (139 - 26) * ratio)
+    g = int(58 + (0 - 58) * ratio)
+    b = int(92 + (0 - 92) * ratio)
+    c.setStrokeColor(Color(r/255, g/255, b/255))
+    c.setFillColor(Color(r/255, g/255, b/255))
+    c.line(0, i, width, i)
+
+# 装饰性边框
+c.setStrokeColor(gold)
+c.setLineWidth(3)
+c.roundRect(15, 15, width-30, height-30, 10, stroke=1, fill=0)
+
+c.setLineWidth(1.5)
+c.roundRect(25, 25, width-50, height-50, 8, stroke=1, fill=0)
+
+# 顶部装饰横条
+c.setFillColor(gold)
+c.rect(40, height-120, width-80, 3, fill=1, stroke=0)
+
+# 主标题区域
+c.setFillColor(gold)
+c.setFont("Helvetica-Bold", 72)
+c.drawCentredString(width/2, height-180, "LOBSTER")
+
+c.setFont("Helvetica-Bold", 36)
+c.drawCentredString(width/2, height-230, "FRESH & DELICIOUS")
+
+# 龙虾图标区域 (用文字和形状模拟)
+c.setFillColor(orange)
+c.setFont("Helvetica-Bold", 120)
+c.drawCentredString(width/2, height-380, "🦞")
+
+# 特色文字
+c.setFillColor(cream)
+c.setFont("Helvetica-Bold", 28)
+c.drawCentredString(width/2, height-480, "Premium Quality")
+
+c.setFont("Helvetica", 18)
+c.drawCentredString(width/2, height-510, "Freshly Caught • Sustainably Sourced")
+
+# 分隔线
+c.setStrokeColor(gold)
+c.setLineWidth(2)
+c.line(100, height-540, width-100, height-540)
+
+# 特色卖点
+features = [
+    "🌊  Ocean Fresh Daily",
+    "🍽️  Premium Selection", 
+    "👨‍🍳  Chef's Special Recipes",
+    "🚚  Fast Delivery Available"
+]
+
+c.setFillColor(cream)
+c.setFont("Helvetica", 20)
+y_pos = height - 590
+for feature in features:
+    c.drawCentredString(width/2, y_pos, feature)
+    y_pos -= 35
+
+# 促销信息框
+c.setFillColor(orange)
+c.roundRect(80, 140, width-160, 100, 15, fill=1, stroke=0)
+
+c.setFillColor(HexColor('#FFFFFF'))
+c.setFont("Helvetica-Bold", 32)
+c.drawCentredString(width/2, 205, "SPECIAL OFFER")
+
+c.setFont("Helvetica-Bold", 24)
+c.drawCentredString(width/2, 165, "20% OFF First Order!")
+
+# 底部联系信息
+c.setFillColor(gold)
+c.setFont("Helvetica", 14)
+c.drawCentredString(width/2, 100, "Order Now: www.lobster-fresh.com")
+c.drawCentredString(width/2, 80, "Tel: 400-888-8888 | WeChat: LobsterFresh")
+
+# 底部装饰横条
+c.rect(40, 55, width-80, 3, fill=1, stroke=0)
+
+# 角落装饰
+def draw_corner_decoration(x, y, size, rotation):
+    c.saveState()
+    c.translate(x, y)
+    c.rotate(rotation)
+    c.setStrokeColor(gold)
+    c.setLineWidth(2)
+    c.line(0, 0, size, 0)
+    c.line(0, 0, 0, size)
+    c.restoreState()
+
+draw_corner_decoration(35, height-35, 30, 0)
+draw_corner_decoration(width-35, height-35, 30, -90)
+draw_corner_decoration(35, 35, 30, 90)
+draw_corner_decoration(width-35, 35, 30, 180)
+
+# 保存PDF
+c.save()
+
+print(f"海报已生成: {output_path}")
+print(f"文件大小: {os.path.getsize(output_path)} bytes")
+```
+
+我已经为您创建了一个精美的龙虾宣传海报PDF文件 `lobster_poster.pdf`，包含以下设计元素：
+
+**设计特点：**
+- 🎨 **渐变背景**：从深蓝到深红的渐变，营造海洋与美食的氛围
+- ✨ **金色边框**：双层圆角边框，增添高档感
+- 🦞 **醒目标题**："LOBSTER" 大字配合 "FRESH & DELICIOUS" 副标题
+- 📋 **特色卖点**：
+  - 每日新鲜海捕
+  - 精选优质品种
+  - 大厨特色菜谱
+  - 快速配送服务
+- 🏷️ **促销信息**：橙色圆角框突出显示"首单8折优惠"
+- 📞 **联系方式**：网站、电话、微信一应俱全
+- 🔶 **装饰元素**：角落装饰和分隔线提升整体美感
+
+海报尺寸为A4标准尺寸，可直接打印使用！</code></pre>
+            
+        </div>
+        <div class="meta">
+            生成时间: 2026-03-12 13:48:51 | AI Skills Platform
+        </div>
+    </div>
+</body>
+</html>

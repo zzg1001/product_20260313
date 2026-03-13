@@ -1,0 +1,9 @@
+{
+    "name": "frontend-design",
+    "description": "创建精美的前端页面和组件。支持多种设计风格：modern（现代）、minimal（极简）、bold（大胆）、elegant（优雅）。",
+    "icon": "🎨",
+    "tags": ["前端", "设计", "HTML", "UI"],
+    "author": "system",
+    "version": "1.0.0",
+    "entry_script": "main.py"
+}

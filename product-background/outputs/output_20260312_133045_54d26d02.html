@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pdf - 执行报告</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px;
+            color: #333;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+        }
+        h1 {
+            color: #1e293b;
+            margin-bottom: 20px;
+            font-size: 28px;
+        }
+        .content {
+            line-height: 1.8;
+            color: #475569;
+        }
+        .meta {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e2e8f0;
+            font-size: 12px;
+            color: #94a3b8;
+        }
+        pre {
+            background: #f8fafc;
+            padding: 16px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 16px 0;
+        }
+        code {
+            font-family: 'JetBrains Mono', Consolas, monospace;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>pdf - 执行报告</h1>
+        <div class="content">
+            
+            <h2>技能信息</h2>
+            <p><strong>名称:</strong> pdf</p>
+            <p><strong>描述:</strong> 从 ZIP 包导入的技能</p>
+
+            <h2>执行结果</h2>
+            <pre><code>{
+  "message": "AI 技能「pdf」执行完成",
+  "skill_type": "ai_prompt",
+  "content": "```python\nfrom reportlab.lib.pagesizes import A4\nfrom reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak\nfrom reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle\nfrom reportlab.lib import colors\nfrom reportlab.lib.units import cm\nfrom reportlab.pdfbase import pdfmetrics\nfrom reportlab.pdfbase.ttfonts import TTFont\nimport os\n\n# 注册中文字体\nfont_paths = [\n    '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',\n    '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',\n    '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',\n    '/System/Library/Fonts/PingFang.ttc',\n    'C:/Windows/Fonts/msyh.ttc',\n]\n\nfont_registered = False\nfor font_path in font_paths:\n    if os.path.exists(font_path):\n        try:\n            pdfmetrics.registerFont(TTFont('Chinese', font_path))\n            font_registered = True\n            break\n        except:\n            continue\n\nif not font_registered:\n    print(\"警告：未找到中文字体，将使用默认字体\")\n    chinese_font = 'Helvetica'\nelse:\n    chinese_font = 'Chinese'\n\n# 创建PDF文档\ndoc = SimpleDocTemplate(\n    \"酒类销售计划说明书.pdf\",\n    pagesize=A4,\n    rightMargin=2*cm,\n    leftMargin=2*cm,\n    topMargin=2*cm,\n    bottomMargin=2*cm\n)\n\n# 获取样式\nstyles = getSampleStyleSheet()\n\n# 自定义样式\ntitle_style = ParagraphStyle(\n    'CustomTitle',\n    parent=styles['Title'],\n    fontName=chinese_font,\n    fontSize=24,\n    spaceAfter=30,\n    alignment=1,\n    textColor=colors.HexColor('#8B0000')\n)\n\nheading1_style = ParagraphStyle(\n    'CustomHeading1',\n    parent=styles['Heading1'],\n    fontName=chinese_font,\n    fontSize=16,\n    spaceBefore=20,\n    spaceAfter=10,\n    textColor=colors.HexColor('#4A4A4A')\n)\n\nheading2_style = ParagraphStyle(\n    'CustomHeading2',\n    parent=styles['Heading2'],\n    fontName=chinese_font,\n    fontSize=14,\n    spaceBefore=15,\n    spaceAfter=8,\n    textColor=colors.HexColor('#666666')\n)\n\nnormal_style = ParagraphStyle(\n    'CustomNormal',\n    parent=styles['Normal'],\n    fontName=chinese_font,\n    fontSize=11,\n    leading=18,\n    spaceAfter=8\n)\n\n# 构建文档内容\nstory = []\n\n# 封面标题\nstory.append(Spacer(1, 3*cm))\nstory.append(Paragraph(\"酒类销售计划说明书\", title_style))\nstory.append(Spacer(1, 1*cm))\nstory.append(Paragraph(\"2024年度营销战略规划\", ParagraphStyle(\n    'Subtitle',\n    parent=normal_style,\n    fontSize=14,\n    alignment=1,\n    textColor=colors.HexColor('#666666')\n)))\nstory.append(Spacer(1, 2*cm))\nstory.append(Paragraph(\"编制单位：XX酒业有限公司\", ParagraphStyle(\n    'Info',\n    parent=normal_style,\n    alignment=1\n)))\nstory.append(Paragraph(\"编制日期：2024年1月\", ParagraphStyle(\n    'Info',\n    parent=normal_style,\n    alignment=1\n)))\nstory.append(PageBreak())\n\n# 目录\nstory.append(Paragraph(\"目 录\", heading1_style))\nstory.append(Spacer(1, 0.5*cm))\ntoc_items = [\n    \"一、执行摘要\",\n    \"二、市场分析\",\n    \"三、产品策略\",\n    \"四、销售目标\",\n    \"五、营销策略\",\n    \"六、渠道建设\",\n    \"七、预算分配\",\n    \"八、实施时间表\",\n    \"九、风险控制\",\n    \"十、预期效果\"\n]\nfor item in toc_items:\n    story.append(Paragraph(item, normal_style))\nstory.append(PageBreak())\n\n# 一、执行摘要\nstory.append(Paragraph(\"一、执行摘要\", heading1_style))\nstory.append(Paragraph(\n    \"本销售计划旨在通过系统化的市场策略，实现公司酒类产品在2024年度的销售突破。\"\n    \"我们将聚焦于中高端白酒市场，同时拓展红酒和精酿啤酒品类，通过线上线下融合的全渠道营销模式，\"\n    \"预计实现年销售额1.5亿元的目标，同比增长35%。\",\n    normal_style\n))\nstory.append(Spacer(1, 0.5*cm))\n\n# 核心目标\nstory.append(Paragraph(\"【核心目标】\", heading2_style))\ncore_targets = [\n    [\"指标\", \"2024年目标\", \"较去年增长\"],\n    [\"销售额\", \"1.5亿元\", \"+35%\"],\n    [\"市场份额\", \"8.5%\", \"+2.3%\"],\n    [\"新增客户\", \"500家\", \"+40%\"],\n    [\"品牌知名度\", \"65%\", \"+15%\"]\n]\ntable = Table(core_targets, colWidths=[5*cm, 4*cm, 4*cm])\ntable.setStyle(TableStyle([\n    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#8B0000')),\n    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),\n    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),\n    ('FONTNAME', (0, 0), (-1, -1), chinese_font),\n    ('FONTSIZE', (0, 0), (-1, 0), 12),\n    ('FONTSIZE', (0, 1), (-1, -1), 11),\n    ('BOTTOMPADDING', (0, 0), (-1, -1), 10),\n    ('TOPPADDING', (0, 0), (-1, -1), 10),\n    ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#CCCCCC')),\n    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')])\n]))\nstory.append(table)\nstory.append(Spacer(1, 0.5*cm))\n\n# 二、市场分析\nstory.append(Paragraph(\"二、市场分析\", heading1_style))\n\nstory.append(Paragraph(\"2.1 行业现状\", heading2_style))\nstory.append(Paragraph(\n    \"中国酒类市场规模持续扩大，2023年市场总规模达到1.2万亿元。其中白酒市场占比约60%，\"\n    \"红酒市场增速最快，年增长率达12%。消费升级趋势明显，中高端产品需求旺盛。\",\n    normal_style\n))\n\nstory.append(Paragraph(\"2.2 目标客户群体\", heading2_style))\ncustomer_groups = [\n    \"• 商务宴请群体（35-55岁，高收入人群）\",\n    \"• 礼品馈赠群体（节日送礼需求）\",\n    \"• 品质生活追求者（25-45岁，注重生活品质）\",\n    \"• 收藏投资群体（高端年份酒收藏者）\"\n]\nfor group in customer_groups:\n    story.append(Paragraph(group, normal_style))\n\nstory.append(Paragraph(\"2.3 竞争分析\", heading2_style))\ncompetition_data = [\n    [\"竞争对手\", \"市场份额\", \"优势\", \"劣势\"],\n    [\"A品牌\", \"15%\", \"品牌历史悠久\", \"价格偏高\"],\n    [\"B品牌\", \"12%\", \"渠道广泛\", \"品质参差\"],\n    [\"C品牌\", \"10%\", \"性价比高\", \"品牌力弱\"],\n    [\"本公司\", \"6.2%\", \"品质优良\", \"知名度待提升\"]\n]\ntable2 = Table(competition_data, colWidths=[3*cm, 3*cm, 4*cm, 4*cm])\ntable2.setStyle(TableStyle([\n    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4A4A4A')),\n    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),\n    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),\n    ('FONTNAME', (0, 0), (-1, -1), chinese_font),\n    ('FONTSIZE', (0, 0), (-1, -1), 10),\n    ('BOTTOMPADDING', (0, 0), (-1, -1), 8),\n    ('TOPPADDING', (0, 0), (-1, -1), 8),\n    ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#CCCCCC')),\n    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')])\n]))\nstory.append(table2)\nstory.append(PageBreak())\n\n# 三、产品策略\nstory.append(Paragraph(\"三、产品策略\", heading1_style))\n\nstory.append(Paragraph(\"3.1 产品线规划\", heading2_style))\nproduct_data = [\n    [\"产品系列\", \"定位\", \"价格区间\", \"目标占比\"],\n    [\"珍藏系列\", \"高端收藏/送礼\", \"800-3000元\", \"25%\"],\n    [\"典藏系列\", \"中高端商务\", \"300-800元\", \"35%\"],\n    [\"经典系列\", \"大众消费\", \"100-300元\", \"30%\"],\n    [\"青春系列\", \"年轻群体\", \"50-100元\", \"10%\"]\n]\ntable3 = Table(product_data, colWidths=[3.5*cm, 4*cm, 3.5*cm, 3*cm])\ntable3.setStyle(TableStyle([\n    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#8B0000')),\n    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),\n    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),\n    ('FONTNAME', (0, 0), (-1, -1), chinese_font),\n    ('FONTSIZE', (0, 0), (-1, -1), 10),\n    ('BOTTOMPADDING', (0, 0), (-1, -1), 8),\n    ('TOPPADDING', (0, 0), (-1, -1), 8),\n    ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#CCCCCC'))\n]))\nstory.append(table3)\n\nstory.append(Paragraph(\"3.2 新品开发计划\", heading2_style))\nstory.append(Paragraph(\n    \"2024年计划推出3款新品：\\n\"\n    \"• Q1：推出「春酿」限定版，主打春节礼品市场\\n\"\n    \"• Q2：推出「夏爽」低度果味酒，吸引年轻消费者\\n\"\n    \"• Q4：推出「年份珍藏」系列，满足高端收藏需求\",\n    normal_style\n))\n\n# 四、销售目标\nstory.append(Paragraph(\"四、销售目标\", heading1_style))\n\nstory.append(Paragraph(\"4.1 季度销售目标\", heading2_style))\nquarterly_data = [\n    [\"季度\", \"销售目标\", \"重点任务\"],\n    [\"Q1\", \"3500万元\", \"春节促销、经销商开拓\"],\n    [\"Q2\", \"3000万元\", \"新品上市、渠道深耕\"],\n    [\"Q3\", \"4000万元\", \"中秋营销、品牌推广\"],\n    [\"Q4\", \"5000万元\", \"年终冲刺、大客户维护\"]\n]\ntable4 = Table(quarterly_data, colWidths=[3*cm, 4*cm, 7*cm])\ntable4.setStyle(TableStyle([\n    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4A4A4A')),\n    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),\n    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),\n    ('FONTNAME', (0, 0), (-1, -1), chinese_font),\n    ('FONTSIZE', (0, 0), (-1, -1), 10),\n    ('BOTTOMPADDING', (0, 0), (-1, -1), 8),\n    ('TOPPADDING', (0, 0), (-1, -1), 8),\n    ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#CCCCCC'))\n]))\nstory.append(table4)\n\nstory.append(Paragraph(\"4.2 区域销售目标\", heading2_style))\nregion_data = [\n    [\"区域\", \"目标销售额\", \"增长率\", \"负责人\"],\n    [\"华东区\", \"5000万元\", \"+40%\", \"张经理\"],\n    [\"华北区\", \"3500万元\", \"+35%\", \"李经理\"],\n    [\"华南区\", \"3000万元\", \"+30%\", \"王经理\"],\n    [\"西部区\", \"2500万元\", \"+45%\", \"刘经理\"],\n    [\"其他区域\", \"1000万元\", \"+25%\", \"赵经理\"]\n]\ntable5 = Table(region_data, colWidths=[3*cm, 3.5*cm, 3*cm, 3*cm])\ntable5.setStyle(TableStyle([\n    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#8B0000')),\n    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),\n    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),\n    ('FONTNAME', (0, 0), (-1, -1), chinese_font),\n    ('FONTSIZE', (0, 0), (-1, -1), 10),\n    ('BOTTOMPADDING', (0"
+}</code></pre><h2>执行输出</h2><pre><code>```python
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+from reportlab.lib.units import cm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+import os
+
+# 注册中文字体
+font_paths = [
+    '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+    '/System/Library/Fonts/PingFang.ttc',
+    'C:/Windows/Fonts/msyh.ttc',
+]
+
+font_registered = False
+for font_path in font_paths:
+    if os.path.exists(font_path):
+        try:
+            pdfmetrics.registerFont(TTFont('Chinese', font_path))
+            font_registered = True
+            break
+        except:
+            continue
+
+if not font_registered:
+    print("警告：未找到中文字体，将使用默认字体")
+    chinese_font = 'Helvetica'
+else:
+    chinese_font = 'Chinese'
+
+# 创建PDF文档
+doc = SimpleDocTemplate(
+    "酒类销售计划说明书.pdf",
+    pagesize=A4,
+    rightMargin=2*cm,
+    leftMargin=2*cm,
+    topMargin=2*cm,
+    bottomMargin=2*cm
+)
+
+# 获取样式
+styles = getSampleStyleSheet()
+
+# 自定义样式
+title_style = ParagraphStyle(
+    'CustomTitle',
+    parent=styles['Title'],
+    fontName=chinese_font,
+    fontSize=24,
+    spaceAfter=30,
+    alignment=1,
+    textColor=colors.HexColor('#8B0000')
+)
+
+heading1_style = ParagraphStyle(
+    'CustomHeading1',
+    parent=styles['Heading1'],
+    fontName=chinese_font,
+    fontSize=16,
+    spaceBefore=20,
+    spaceAfter=10,
+    textColor=colors.HexColor('#4A4A4A')
+)
+
+heading2_style = ParagraphStyle(
+    'CustomHeading2',
+    parent=styles['Heading2'],
+    fontName=chinese_font,
+    fontSize=14,
+    spaceBefore=15,
+    spaceAfter=8,
+    textColor=colors.HexColor('#666666')
+)
+
+normal_style = ParagraphStyle(
+    'CustomNormal',
+    parent=styles['Normal'],
+    fontName=chinese_font,
+    fontSize=11,
+    leading=18,
+    spaceAfter=8
+)
+
+# 构建文档内容
+story = []
+
+# 封面标题
+story.append(Spacer(1, 3*cm))
+story.append(Paragraph("酒类销售计划说明书", title_style))
+story.append(Spacer(1, 1*cm))
+story.append(Paragraph("2024年度营销战略规划", ParagraphStyle(
+    'Subtitle',
+    parent=normal_style,
+    fontSize=14,
+    alignment=1,
+    textColor=colors.HexColor('#666666')
+)))
+story.append(Spacer(1, 2*cm))
+story.append(Paragraph("编制单位：XX酒业有限公司", ParagraphStyle(
+    'Info',
+    parent=normal_style,
+    alignment=1
+)))
+story.append(Paragraph("编制日期：2024年1月", ParagraphStyle(
+    'Info',
+    parent=normal_style,
+    alignment=1
+)))
+story.append(PageBreak())
+
+# 目录
+story.append(Paragraph("目 录", heading1_style))
+story.append(Spacer(1, 0.5*cm))
+toc_items = [
+    "一、执行摘要",
+    "二、市场分析",
+    "三、产品策略",
+    "四、销售目标",
+    "五、营销策略",
+    "六、渠道建设",
+    "七、预算分配",
+    "八、实施时间表",
+    "九、风险控制",
+    "十、预期效果"
+]
+for item in toc_items:
+    story.append(Paragraph(item, normal_style))
+story.append(PageBreak())
+
+# 一、执行摘要
+story.append(Paragraph("一、执行摘要", heading1_style))
+story.append(Paragraph(
+    "本销售计划旨在通过系统化的市场策略，实现公司酒类产品在2024年度的销售突破。"
+    "我们将聚焦于中高端白酒市场，同时拓展红酒和精酿啤酒品类，通过线上线下融合的全渠道营销模式，"
+    "预计实现年销售额1.5亿元的目标，同比增长35%。",
+    normal_style
+))
+story.append(Spacer(1, 0.5*cm))
+
+# 核心目标
+story.append(Paragraph("【核心目标】", heading2_style))
+core_targets = [
+    ["指标", "2024年目标", "较去年增长"],
+    ["销售额", "1.5亿元", "+35%"],
+    ["市场份额", "8.5%", "+2.3%"],
+    ["新增客户", "500家", "+40%"],
+    ["品牌知名度", "65%", "+15%"]
+]
+table = Table(core_targets, colWidths=[5*cm, 4*cm, 4*cm])
+table.setStyle(TableStyle([
+    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#8B0000')),
+    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    ('FONTNAME', (0, 0), (-1, -1), chinese_font),
+    ('FONTSIZE', (0, 0), (-1, 0), 12),
+    ('FONTSIZE', (0, 1), (-1, -1), 11),
+    ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+    ('TOPPADDING', (0, 0), (-1, -1), 10),
+    ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#CCCCCC')),
+    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')])
+]))
+story.append(table)
+story.append(Spacer(1, 0.5*cm))
+
+# 二、市场分析
+story.append(Paragraph("二、市场分析", heading1_style))
+
+story.append(Paragraph("2.1 行业现状", heading2_style))
+story.append(Paragraph(
+    "中国酒类市场规模持续扩大，2023年市场总规模达到1.2万亿元。其中白酒市场占比约60%，"
+    "红酒市场增速最快，年增长率达12%。消费升级趋势明显，中高端产品需求旺盛。",
+    normal_style
+))
+
+story.append(Paragraph("2.2 目标客户群体", heading2_style))
+customer_groups = [
+    "• 商务宴请群体（35-55岁，高收入人群）",
+    "• 礼品馈赠群体（节日送礼需求）",
+    "• 品质生活追求者（25-45岁，注重生活品质）",
+    "• 收藏投资群体（高端年份酒收藏者）"
+]
+for group in customer_groups:
+    story.append(Paragraph(group, normal_style))
+
+story.append(Paragraph("2.3 竞争分析", heading2_style))
+competition_data = [
+    ["竞争对手", "市场份额", "优势", "劣势"],
+    ["A品牌", "15%", "品牌历史悠久", "价格偏高"],
+    ["B品牌", "12%", "渠道广泛", "品质参差"],
+    ["C品牌", "10%", "性价比高", "品牌力弱"],
+    ["本公司", "6.2%", "品质优良", "知名度待提升"]
+]
+table2 = Table(competition_data, colWidths=[3*cm, 3*cm, 4*cm, 4*cm])
+table2.setStyle(TableStyle([
+    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4A4A4A')),
+    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    ('FONTNAME', (0, 0), (-1, -1), chinese_font),
+    ('FONTSIZE', (0, 0), (-1, -1), 10),
+    ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+    ('TOPPADDING', (0, 0), (-1, -1), 8),
+    ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#CCCCCC')),
+    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')])
+]))
+story.append(table2)
+story.append(PageBreak())
+
+# 三、产品策略
+story.append(Paragraph("三、产品策略", heading1_style))
+
+story.append(Paragraph("3.1 产品线规划", heading2_style))
+product_data = [
+    ["产品系列", "定位", "价格区间", "目标占比"],
+    ["珍藏系列", "高端收藏/送礼", "800-3000元", "25%"],
+    ["典藏系列", "中高端商务", "300-800元", "35%"],
+    ["经典系列", "大众消费", "100-300元", "30%"],
+    ["青春系列", "年轻群体", "50-100元", "10%"]
+]
+table3 = Table(product_data, colWidths=[3.5*cm, 4*cm, 3.5*cm, 3*cm])
+table3.setStyle(TableStyle([
+    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#8B0000')),
+    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    ('FONTNAME', (0, 0), (-1, -1), chinese_font),
+    ('FONTSIZE', (0, 0), (-1, -1), 10),
+    ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+    ('TOPPADDING', (0, 0), (-1, -1), 8),
+    ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#CCCCCC'))
+]))
+story.append(table3)
+
+story.append(Paragraph("3.2 新品开发计划", heading2_style))
+story.append(Paragraph(
+    "2024年计划推出3款新品：\n"
+    "• Q1：推出「春酿」限定版，主打春节礼品市场\n"
+    "• Q2：推出「夏爽」低度果味酒，吸引年轻消费者\n"
+    "• Q4：推出「年份珍藏」系列，满足高端收藏需求",
+    normal_style
+))
+
+# 四、销售目标
+story.append(Paragraph("四、销售目标", heading1_style))
+
+story.append(Paragraph("4.1 季度销售目标", heading2_style))
+quarterly_data = [
+    ["季度", "销售目标", "重点任务"],
+    ["Q1", "3500万元", "春节促销、经销商开拓"],
+    ["Q2", "3000万元", "新品上市、渠道深耕"],
+    ["Q3", "4000万元", "中秋营销、品牌推广"],
+    ["Q4", "5000万元", "年终冲刺、大客户维护"]
+]
+table4 = Table(quarterly_data, colWidths=[3*cm, 4*cm, 7*cm])
+table4.setStyle(TableStyle([
+    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4A4A4A')),
+    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    ('FONTNAME', (0, 0), (-1, -1), chinese_font),
+    ('FONTSIZE', (0, 0), (-1, -1), 10),
+    ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+    ('TOPPADDING', (0, 0), (-1, -1), 8),
+    ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#CCCCCC'))
+]))
+story.append(table4)
+
+story.append(Paragraph("4.2 区域销售目标", heading2_style))
+region_data = [
+    ["区域", "目标销售额", "增长率", "负责人"],
+    ["华东区", "5000万元", "+40%", "张经理"],
+    ["华北区", "3500万元", "+35%", "李经理"],
+    ["华南区", "3000万元", "+30%", "王经理"],
+    ["西部区", "2500万元", "+45%", "刘经理"],
+    ["其他区域", "1000万元", "+25%", "赵经理"]
+]
+table5 = Table(region_data, colWidths=[3*cm, 3.5*cm, 3*cm, 3*cm])
+table5.setStyle(TableStyle([
+    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#8B0000')),
+    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    ('FONTNAME', (0, 0), (-1, -1), chinese_font),
+    ('FONTSIZE', (0, 0), (-1, -1), 10),
+    ('BOTTOMPADDING', (0</code></pre>
+            
+        </div>
+        <div class="meta">
+            生成时间: 2026-03-12 13:30:45 | AI Skills Platform
+        </div>
+    </div>
+</body>
+</html>
