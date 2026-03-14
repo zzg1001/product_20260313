@@ -113,12 +113,52 @@ export const skillsApi = {
   // Get single skill
   getById: (id: string) => request<Skill>(`/skills/${id}`),
 
+  // Get skill by name
+  getByName: (name: string) => request<Skill>(`/skills/by-name/${encodeURIComponent(name)}`),
+
   // Create skill (without folder)
   create: (data: SkillCreate) =>
     request<Skill>('/skills', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+
+  // Preview ZIP content before upload (with AI analysis)
+  previewUpload: async (file: File): Promise<{
+    name: string
+    description: string
+    icon: string
+    tags: string[]
+    author: string
+    version: string
+    entry_script: string | null
+    files: string[]
+    ai_analysis?: {
+      description?: string
+      capabilities?: string[]
+      input_types?: string[]
+      output_types?: string[]
+      tags?: string[]
+      icon?: string
+      complexity?: string
+      error?: string
+    }
+  }> => {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const response = await fetch(`${API_BASE_URL}/skills/upload/preview`, {
+      method: 'POST',
+      body: formData,
+    })
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Preview failed' }))
+      throw new Error(error.detail || `HTTP error! status: ${response.status}`)
+    }
+
+    return response.json()
+  },
 
   // Upload skill (with folder ZIP)
   upload: async (data: SkillUploadData): Promise<Skill> => {
@@ -183,6 +223,43 @@ export const skillsApi = {
   // Get skill file content
   getFileContent: (id: string, filePath: string) =>
     request<{ content: string | null; binary?: boolean; size?: number }>(`/skills/${id}/file/${filePath}`),
+
+  // ============ 临时技能 API ============
+
+  // Create temporary skill (for testing)
+  createTemp: (data: SkillCreate) =>
+    request<TempSkillResponse>('/skills/temp', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // Get temporary skill
+  getTemp: (tempId: string) =>
+    request<TempSkillResponse>(`/skills/temp/${tempId}`),
+
+  // Finalize temporary skill (move to permanent)
+  finalizeTemp: (tempId: string) =>
+    request<Skill>(`/skills/temp/${tempId}/finalize`, {
+      method: 'POST',
+    }),
+
+  // Delete temporary skill
+  deleteTemp: (tempId: string) =>
+    request<void>(`/skills/temp/${tempId}`, {
+      method: 'DELETE',
+    }),
+}
+
+// Temporary skill response
+export interface TempSkillResponse {
+  temp_id: string
+  name: string
+  description: string | null
+  icon: string | null
+  tags: string[] | null
+  folder_path: string
+  entry_script: string | null
+  is_temp?: boolean
 }
 
 // ============ Agent API ============
@@ -330,6 +407,13 @@ export const agentApi = {
   // Execute skill
   execute: (data: ExecuteRequest) =>
     request<ExecuteResponse>('/agent/execute', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // Execute temporary skill (for testing)
+  executeTemp: (data: ExecuteRequest) =>
+    request<ExecuteResponse>('/agent/execute-temp', {
       method: 'POST',
       body: JSON.stringify(data),
     }),

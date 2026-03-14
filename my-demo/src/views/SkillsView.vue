@@ -56,6 +56,19 @@ const TOTAL_SLOTS = 20
 const isLoadingSkills = ref(false)
 const skillsError = ref<string | null>(null)
 
+// 技能交互配置
+interface SkillInteraction {
+  id: string
+  type: string
+  label: string
+}
+
+// 输出配置
+interface OutputConfig {
+  enabled: boolean
+  preferred_type?: string
+}
+
 // Skill 类型定义
 interface Skill {
   id: string  // UUID
@@ -68,6 +81,8 @@ interface Skill {
   created_at?: string
   folder_path?: string
   entry_script?: string
+  interactions?: SkillInteraction[]
+  output_config?: OutputConfig
 }
 
 // Skills数据（从API获取）
@@ -106,6 +121,42 @@ const loadSkills = async () => {
 // Workflows 数据（从 API 加载）
 const workflows = ref<Workflow[]>([])
 const isLoadingWorkflows = ref(false)
+
+// Workflow tooltip 状态
+const wfTooltip = ref<{
+  show: boolean
+  workflow: Workflow | null
+  style: { top: string; left: string }
+}>({
+  show: false,
+  workflow: null,
+  style: { top: '0px', left: '0px' }
+})
+
+const handleWfMouseMove = (e: MouseEvent, workflow: Workflow) => {
+  const tooltipWidth = 160
+  const tooltipHeight = 100
+
+  let left = e.clientX + 12
+  let top = e.clientY + 12
+
+  if (left + tooltipWidth > window.innerWidth - 10) {
+    left = e.clientX - tooltipWidth - 8
+  }
+  if (top + tooltipHeight > window.innerHeight - 10) {
+    top = e.clientY - tooltipHeight - 8
+  }
+
+  wfTooltip.value = {
+    show: true,
+    workflow,
+    style: { top: `${top}px`, left: `${left}px` }
+  }
+}
+
+const handleWfMouseLeave = () => {
+  wfTooltip.value.show = false
+}
 
 // 加载工作流数据
 const loadWorkflows = async () => {
@@ -509,20 +560,24 @@ const handleSkillSubmit = async (skillData: any) => {
     }
   }
 
-  // 清除状态并关闭弹窗
-  pendingSkillName.value = null
-  showModal.value = false
-
-  // 如果是从 Agent 页面跳过来添加技能的，添加完成后跳回去并提示是否继续
-  if (isFromAgent) {
-    activeTab.value = 'agent'
-    // 等待 DOM 更新后调用 onSkillAdded 显示确认对话框
-    nextTick(() => {
-      setTimeout(() => {
-        agentChatRef.value?.onSkillAdded(addedName)
-      }, 300)
-    })
+  // 如果是从 Agent 来的，不自动关闭弹窗（由 AddSkillModal 内部控制测试和返回流程）
+  if (!isFromAgent) {
+    pendingSkillName.value = null
+    showModal.value = false
   }
+  // 从 Agent 来的情况：弹窗保持打开，等待用户在对话中选择"返回继续执行"或"留在这里"
+}
+
+// 处理从 AddSkillModal 返回 Agent 的事件
+const handleReturnToAgent = (skillName: string) => {
+  showModal.value = false
+  pendingSkillName.value = null
+  loadSkills()  // 刷新技能列表
+  activeTab.value = 'agent'
+  // 等待 DOM 更新后调用 onSkillAdded 显示确认对话框
+  nextTick(() => {
+    agentChatRef.value?.onSkillAdded(skillName)
+  })
 }
 
 const deleteSkill = async (index: number) => {
@@ -1157,6 +1212,9 @@ onUnmounted(() => {
                 :key="workflow.id"
                 class="wf-tile"
                 @click="runWorkflow(workflow)"
+                @mouseenter="(e) => handleWfMouseMove(e, workflow)"
+                @mousemove="(e) => handleWfMouseMove(e, workflow)"
+                @mouseleave="handleWfMouseLeave"
               >
                 <!-- 图标 -->
                 <div class="wf-tile-icon">{{ workflow.icon || '⚡' }}</div>
@@ -1164,19 +1222,6 @@ onUnmounted(() => {
                 <div class="wf-tile-name">{{ workflow.name }}</div>
                 <!-- 步骤数 -->
                 <div class="wf-tile-meta">{{ workflow.nodes.length }} 步骤</div>
-
-                <!-- 悬浮信息卡片 -->
-                <div class="wf-tile-tooltip">
-                  <div class="tooltip-header">
-                    <span class="tooltip-icon">{{ workflow.icon || '⚡' }}</span>
-                    <span class="tooltip-name">{{ workflow.name }}</span>
-                  </div>
-                  <p class="tooltip-desc">{{ workflow.description || '点击运行此工作流' }}</p>
-                  <div class="tooltip-meta">
-                    <span>{{ workflow.nodes.length }} 步骤</span>
-                    <span>{{ workflow.edges?.length || 0 }} 连接</span>
-                  </div>
-                </div>
 
                 <!-- 操作按钮 -->
                 <div class="wf-tile-actions">
@@ -1214,7 +1259,7 @@ onUnmounted(() => {
       </main>
     </div>
 
-    <AddSkillModal :show="showModal" :mode="modalMode" :prefill-name="pendingSkillName" @close="closeModal" @submit="handleSkillSubmit" />
+    <AddSkillModal :show="showModal" :mode="modalMode" :prefill-name="pendingSkillName" :is-from-agent="!!pendingSkillName" @close="closeModal" @submit="handleSkillSubmit" @return-to-agent="handleReturnToAgent" />
 
     <!-- 工作流运行对话框 -->
     <Teleport to="body">
@@ -1567,6 +1612,23 @@ onUnmounted(() => {
         <span class="toast-message">{{ toastMessage }}</span>
       </div>
     </Transition>
+
+    <!-- Workflow Tooltip (Teleport 到 body) -->
+    <Teleport to="body">
+      <Transition name="wf-tooltip">
+        <div v-if="wfTooltip.show && wfTooltip.workflow" class="wf-tooltip" :style="wfTooltip.style">
+          <div class="wf-tooltip-header">
+            <span class="wf-tooltip-icon">{{ wfTooltip.workflow.icon || '⚡' }}</span>
+            <span class="wf-tooltip-name">{{ wfTooltip.workflow.name }}</span>
+          </div>
+          <p class="wf-tooltip-desc">{{ wfTooltip.workflow.description || '点击运行' }}</p>
+          <div class="wf-tooltip-meta">
+            <span>{{ wfTooltip.workflow.nodes.length }} 步骤</span>
+            <span>{{ wfTooltip.workflow.edges?.length || 0 }} 连接</span>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -2358,79 +2420,6 @@ onUnmounted(() => {
   font-size: 11px;
   color: #94a3b8;
   font-weight: 500;
-}
-
-/* 悬浮信息卡片 */
-.wf-tile-tooltip {
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 6px);
-  transform: translateX(-50%) scale(0.95);
-  padding: 8px 10px;
-  background: #1e293b;
-  color: #f1f5f9;
-  border-radius: 8px;
-  width: max-content;
-  max-width: 180px;
-  z-index: 9999;
-  opacity: 0;
-  visibility: hidden;
-  transition: all 0.15s ease;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-  pointer-events: none;
-}
-
-.wf-tile-tooltip::after {
-  content: '';
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  border: 5px solid transparent;
-  border-top-color: #1e293b;
-}
-
-.wf-tile:hover .wf-tile-tooltip {
-  opacity: 1;
-  visibility: visible;
-  transform: translateX(-50%) scale(1);
-}
-
-.tooltip-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.tooltip-icon {
-  font-size: 16px;
-}
-
-.tooltip-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: #fff;
-}
-
-.tooltip-desc {
-  font-size: 11px;
-  color: #cbd5e1;
-  line-height: 1.4;
-  margin: 0 0 8px 0;
-}
-
-.tooltip-meta {
-  display: flex;
-  gap: 12px;
-  font-size: 10px;
-  color: #94a3b8;
-}
-
-.tooltip-meta span {
-  display: flex;
-  align-items: center;
-  gap: 4px;
 }
 
 /* 操作按钮 */
@@ -3713,5 +3702,73 @@ onUnmounted(() => {
 .workflow-dialog-enter-from .workflow-run-dialog,
 .workflow-dialog-leave-to .workflow-run-dialog {
   transform: scale(0.95) translateY(20px);
+}
+
+/* Workflow Tooltip - 紧凑跟随鼠标 */
+.wf-tooltip {
+  position: fixed;
+  padding: 8px 10px;
+  background: rgba(15, 23, 42, 0.95);
+  color: #f1f5f9;
+  border-radius: 6px;
+  min-width: 120px;
+  max-width: 160px;
+  z-index: 99999;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+}
+
+.wf-tooltip-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.wf-tooltip-icon {
+  font-size: 12px;
+}
+
+.wf-tooltip-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wf-tooltip-desc {
+  font-size: 10px;
+  line-height: 1.3;
+  color: #94a3b8;
+  margin: 0 0 4px 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.wf-tooltip-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 9px;
+  color: #64748b;
+}
+
+/* Tooltip 动画 */
+.wf-tooltip-enter-active {
+  transition: all 0.12s ease-out;
+}
+
+.wf-tooltip-leave-active {
+  transition: all 0.08s ease-in;
+}
+
+.wf-tooltip-enter-from,
+.wf-tooltip-leave-to {
+  opacity: 0;
+  transform: scale(0.95);
 }
 </style>

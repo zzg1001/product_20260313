@@ -21,6 +21,10 @@ interface SkillStep {
   output?: string
   userInput?: string  // 用户输入的参数/指令
   outputFile?: OutputFile  // 输出文件
+  errorDetails?: {  // 执行结果详情（用于分析和建议）
+    error?: string
+    output?: string
+  }
 }
 
 interface PipelineEdge {
@@ -137,7 +141,6 @@ interface UploadedFile {
 }
 const uploadedFiles = ref<UploadedFile[]>([])
 const fileInputRef = ref<HTMLInputElement | null>(null)
-const isDragging = ref(false)
 
 // 停止控制器
 let abortController: AbortController | null = null
@@ -252,19 +255,8 @@ const triggerFileUpload = () => {
 }
 
 // 拖拽上传
-const handleDragOver = (e: DragEvent) => {
-  e.preventDefault()
-  isDragging.value = true
-}
-
-const handleDragLeave = (e: DragEvent) => {
-  e.preventDefault()
-  isDragging.value = false
-}
-
 const handleDrop = (e: DragEvent) => {
   e.preventDefault()
-  isDragging.value = false
   if (e.dataTransfer?.files) {
     addFiles(Array.from(e.dataTransfer.files))
   }
@@ -780,7 +772,19 @@ const handleSkillComplete = async (result: { success: boolean; output?: string; 
               }
             } else {
               step.status = 'error'
-              step.output = `❌ 执行失败: ${response.error || '未知错误'}`
+              // 构建完整的错误信息
+              const errorParts: string[] = []
+              if (response.error) {
+                errorParts.push(`错误: ${response.error}`)
+              }
+              if (response.output) {
+                errorParts.push(`输出: ${response.output}`)
+              }
+              step.output = '结果可能不符合预期'
+              step.errorDetails = {
+                error: response.error,
+                output: response.output
+              }
             }
           } else {
             // 没有 skillId，模拟执行
@@ -791,7 +795,10 @@ const handleSkillComplete = async (result: { success: boolean; output?: string; 
         } catch (error: any) {
           console.error(`[handleSkillComplete] Error:`, error)
           step.status = 'error'
-          step.output = `❌ 执行失败: ${error.message || '未知错误'}`
+          step.output = `结果可能不符合预期`
+          step.errorDetails = {
+            error: error.message || '未知错误'
+          }
         }
 
         scrollToBottom()
@@ -1581,7 +1588,19 @@ const executeSkills = async (messageId: number, skills: SkillStep[], startIndex:
           }
         } else {
           step.status = 'error'
-          step.output = response.error || '执行失败'
+          // 构建完整的错误信息
+          const errorParts: string[] = []
+          if (response.error) {
+            errorParts.push(`错误: ${response.error}`)
+          }
+          if (response.output) {
+            errorParts.push(`输出: ${response.output}`)
+          }
+          step.output = '结果可能不符合预期'
+          step.errorDetails = {
+            error: response.error,
+            output: response.output
+          }
         }
       } else {
         // 没有 skillId，说明技能未找到
@@ -1595,8 +1614,10 @@ const executeSkills = async (messageId: number, skills: SkillStep[], startIndex:
       console.error('Skill execution failed:', error)
       // API 失败
       step.status = 'error'
-      step.output = `❌ 执行失败: ${error.message || '未知错误'}`
-      step.outputFile = generateOutputFile(step.skillName, step.description, step.output)
+      step.output = `结果可能不符合预期`
+      step.errorDetails = {
+        error: error.message || '未知错误'
+      }
     }
   }
 
@@ -1779,7 +1800,19 @@ const executeSkillsParallel = async (messageId: number) => {
             }
           } else {
             step.status = 'error'
-            step.output = response.error || '执行失败'
+            // 构建完整的错误信息
+            const errorParts: string[] = []
+            if (response.error) {
+              errorParts.push(`错误: ${response.error}`)
+            }
+            if (response.output) {
+              errorParts.push(`输出: ${response.output}`)
+            }
+            step.output = '结果可能不符合预期'
+            step.errorDetails = {
+              error: response.error,
+              output: response.output
+            }
           }
         } else {
           // 没有 skillId，说明技能未找到
@@ -1793,8 +1826,10 @@ const executeSkillsParallel = async (messageId: number) => {
         // API 调用失败
         console.error(`[Skill Execution] API error for "${step.skillName}":`, error)
         step.status = 'error'
-        step.output = `❌ 执行失败: ${error.message || '未知错误'}`
-        step.outputFile = generateOutputFile(step.skillName, step.description, step.output)
+        step.output = `结果可能不符合预期`
+        step.errorDetails = {
+          error: error.message || '未知错误'
+        }
       }
     }))
     scrollToBottom()
@@ -2406,6 +2441,99 @@ const formatTime = (date: Date) => {
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
 
+// 获取执行结果文本（友好展示）
+const getExecutionResultText = (step: SkillStep): string => {
+  if (!step.errorDetails?.error) {
+    return '执行未能产生预期的结果'
+  }
+
+  const error = step.errorDetails.error
+
+  // 语法错误
+  if (error.includes('SyntaxError')) {
+    return '技能代码在解析时遇到了问题，可能需要调整代码格式'
+  }
+
+  // 类型错误
+  if (error.includes('TypeError')) {
+    return '数据类型不匹配，输入的内容格式可能需要调整'
+  }
+
+  // 键错误
+  if (error.includes('KeyError')) {
+    return '找不到需要的数据字段，输入数据的结构可能不符合预期'
+  }
+
+  // 文件错误
+  if (error.includes('FileNotFoundError') || error.includes('No such file')) {
+    return '找不到需要处理的文件'
+  }
+
+  // 值错误
+  if (error.includes('ValueError')) {
+    return '输入的值格式不正确'
+  }
+
+  // 导入错误
+  if (error.includes('ImportError') || error.includes('ModuleNotFoundError')) {
+    return '技能需要的某些依赖还没有安装'
+  }
+
+  // 默认
+  return '执行过程中遇到了一些问题'
+}
+
+// 获取执行思考/建议
+const getExecutionThinking = (step: SkillStep): string => {
+  if (!step.errorDetails?.error) {
+    return '建议检查输入内容是否正确，或者尝试修改技能代码'
+  }
+
+  const error = step.errorDetails.error
+
+  if (error.includes('SyntaxError')) {
+    return '这通常是代码格式问题，比如引号、括号不匹配等。可以尝试修改技能代码。'
+  }
+
+  if (error.includes('TypeError')) {
+    return '输入的数据类型和技能期望的不一致。比如期望数字却收到了文字，可以检查输入格式。'
+  }
+
+  if (error.includes('KeyError')) {
+    return '输入的 JSON 数据缺少必要的字段。请确认输入数据包含技能需要的所有字段。'
+  }
+
+  if (error.includes('FileNotFoundError')) {
+    return '需要先上传文件，或者检查文件路径是否正确。'
+  }
+
+  if (error.includes('ValueError')) {
+    return '输入值的格式不对，比如日期格式、数字格式等。请检查并调整输入内容。'
+  }
+
+  if (error.includes('ImportError') || error.includes('ModuleNotFoundError')) {
+    return '技能代码使用了未安装的库，需要在服务器上安装相应的依赖。'
+  }
+
+  return '可以尝试重新输入，或者修改技能代码来适应当前的输入。'
+}
+
+// 重试技能
+const retrySkill = (step: SkillStep) => {
+  // 重置状态，让用户可以重新输入
+  step.status = 'pending'
+  step.output = undefined
+  step.errorDetails = undefined
+  step.userInput = undefined
+}
+
+// 修改技能（跳转到技能编辑）
+const modifySkill = (step: SkillStep) => {
+  if (step.skillId) {
+    emit('gotoSkills', step.skillName, 'create')
+  }
+}
+
 // 获取文件类型图标和颜色
 const getFileTypeInfo = (type: OutputFile['type']) => {
   const typeMap: Record<OutputFile['type'], { icon: string; color: string; label: string }> = {
@@ -2703,7 +2831,11 @@ const openOutputFile = async (file: OutputFile) => {
       </div>
 
       <!-- 对话区域 -->
-      <div class="chat-main">
+      <div
+        class="chat-main"
+        @dragover.prevent
+        @drop="handleDrop"
+      >
         <!-- 消息区域 -->
         <div class="chat-messages" ref="chatContainer">
       <div class="messages-inner">
@@ -2874,6 +3006,37 @@ const openOutputFile = async (file: OutputFile) => {
                         </svg>
                       </button>
                     </div>
+                    <!-- 执行结果（包括不符合预期的情况） -->
+                    <div v-if="step.status === 'error'" class="step-result-area">
+                      <div class="result-section">
+                        <div class="result-header">
+                          <span class="result-icon">📋</span>
+                          <span class="result-title">执行结果</span>
+                        </div>
+                        <div class="result-content">
+                          <p class="result-text">{{ getExecutionResultText(step) }}</p>
+                        </div>
+                      </div>
+                      <div class="thinking-section">
+                        <div class="thinking-header">
+                          <span class="thinking-icon">💭</span>
+                          <span class="thinking-title">分析</span>
+                        </div>
+                        <div class="thinking-content">
+                          <p class="thinking-text">{{ getExecutionThinking(step) }}</p>
+                          <div v-if="step.errorDetails?.output" class="execution-log">
+                            <details>
+                              <summary>查看执行日志</summary>
+                              <pre>{{ step.errorDetails.output }}</pre>
+                            </details>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="result-actions">
+                        <button class="action-btn retry" @click.stop="retrySkill(step)">重试</button>
+                        <button class="action-btn modify" @click.stop="modifySkill(step)">修改技能</button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2994,13 +3157,7 @@ const openOutputFile = async (file: OutputFile) => {
         </Transition>
 
         <!-- 输入区域 -->
-        <div
-          class="chat-input"
-          :class="{ 'is-dragging': isDragging }"
-          @dragover="handleDragOver"
-          @dragleave="handleDragLeave"
-          @drop="handleDrop"
-        >
+        <div class="chat-input">
           <!-- 已上传文件预览 -->
           <div v-if="uploadedFiles.length > 0" class="uploaded-files">
             <div
@@ -3086,19 +3243,8 @@ const openOutputFile = async (file: OutputFile) => {
               按 Enter 发送 · 点击 📎 或拖拽文件上传
             </template>
           </div>
-
-          <!-- 拖拽遮罩 -->
-          <div v-if="isDragging" class="drag-overlay">
-            <div class="drag-content">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                <polyline points="17 8 12 3 7 8"/>
-                <line x1="12" y1="3" x2="12" y2="15"/>
-              </svg>
-              <span>松开鼠标上传文件</span>
-            </div>
-          </div>
         </div>
+
       </div>
     </div>
 
@@ -4334,6 +4480,7 @@ const openOutputFile = async (file: OutputFile) => {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  position: relative;
 }
 
 /* Messages */
@@ -4969,6 +5116,126 @@ const openOutputFile = async (file: OutputFile) => {
   border-radius: 0 6px 6px 0;
   font-size: 11px;
   color: #059669;
+}
+
+/* 执行结果区域（友好展示） */
+.step-result-area {
+  margin-top: 10px;
+  margin-left: 32px;
+  background: linear-gradient(135deg, #fefce8 0%, #fef3c7 100%);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  border-radius: 12px;
+  padding: 14px;
+  max-width: 480px;
+}
+
+.step-result-area .result-section {
+  margin-bottom: 12px;
+}
+
+.step-result-area .result-header,
+.step-result-area .thinking-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.step-result-area .result-icon,
+.step-result-area .thinking-icon {
+  font-size: 14px;
+}
+
+.step-result-area .result-title,
+.step-result-area .thinking-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #92400e;
+}
+
+.step-result-area .result-content,
+.step-result-area .thinking-content {
+  padding-left: 22px;
+}
+
+.step-result-area .result-text,
+.step-result-area .thinking-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #78350f;
+}
+
+.step-result-area .thinking-section {
+  padding-top: 10px;
+  border-top: 1px dashed rgba(234, 179, 8, 0.4);
+}
+
+.step-result-area .execution-log {
+  margin-top: 8px;
+}
+
+.step-result-area .execution-log summary {
+  font-size: 11px;
+  color: #a16207;
+  cursor: pointer;
+  user-select: none;
+}
+
+.step-result-area .execution-log summary:hover {
+  color: #854d0e;
+}
+
+.step-result-area .execution-log pre {
+  margin: 6px 0 0 0;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 6px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 10px;
+  color: #78350f;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.step-result-area .result-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(234, 179, 8, 0.4);
+}
+
+.step-result-area .action-btn {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.step-result-area .action-btn.retry {
+  background: #fbbf24;
+  color: #78350f;
+}
+
+.step-result-area .action-btn.retry:hover {
+  background: #f59e0b;
+}
+
+.step-result-area .action-btn.modify {
+  background: white;
+  color: #92400e;
+  border: 1px solid rgba(234, 179, 8, 0.5);
+}
+
+.step-result-area .action-btn.modify:hover {
+  background: #fffbeb;
+  border-color: #f59e0b;
 }
 
 /* 输出文件链接 - 紧凑芯片风格 */
@@ -5656,60 +5923,6 @@ const openOutputFile = async (file: OutputFile) => {
   text-overflow: ellipsis;
 }
 
-/* 拖拽遮罩 */
-.drag-overlay {
-  position: absolute;
-  inset: 0;
-  background: rgba(99, 102, 241, 0.95);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-  border-radius: 12px;
-  animation: dragFadeIn 0.2s ease;
-}
-
-@keyframes dragFadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-.drag-content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  color: #fff;
-}
-
-.drag-content svg {
-  width: 48px;
-  height: 48px;
-  animation: dragBounce 0.5s ease infinite alternate;
-}
-
-@keyframes dragBounce {
-  from {
-    transform: translateY(0);
-  }
-  to {
-    transform: translateY(-8px);
-  }
-}
-
-.drag-content span {
-  font-size: 14px;
-  font-weight: 500;
-}
-
-/* 拖拽状态的输入区 */
-.chat-input.is-dragging {
-  position: relative;
-}
 
 /* ==================== 右侧技能执行面板 ==================== */
 .skill-side-panel {

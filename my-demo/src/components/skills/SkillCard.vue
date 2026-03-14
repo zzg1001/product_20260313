@@ -1,5 +1,16 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
+
+interface SkillInteraction {
+  id: string
+  type: string
+  label: string
+}
+
+interface OutputConfig {
+  enabled: boolean
+  preferred_type?: string
+}
 
 interface Skill {
   id: number
@@ -10,6 +21,8 @@ interface Skill {
   author: string
   version: string
   created_at?: string
+  interactions?: SkillInteraction[]
+  output_config?: OutputConfig
 }
 
 const props = defineProps<{
@@ -21,9 +34,43 @@ const emit = defineEmits<{
   edit: []
 }>()
 
-// 是否可编辑（上传的不可编辑）
-const isEditable = computed(() => {
-  return props.skill.author !== 'uploaded'
+const isEditable = computed(() => props.skill.author !== 'uploaded')
+
+// 是否显示作者（排除uploaded和unknown）
+const showAuthor = computed(() => {
+  const author = props.skill.author
+  return author && author !== 'uploaded' && author !== 'unknown'
+})
+
+// 输出类型
+const outputType = computed(() => {
+  const type = props.skill.output_config?.preferred_type
+  if (!type) return null
+  const typeMap: Record<string, string> = {
+    'html': '网页',
+    'pdf': 'PDF',
+    'xlsx': 'Excel',
+    'docx': 'Word',
+    'png': '图片',
+    'json': 'JSON',
+    'txt': '文本',
+    'md': 'Markdown'
+  }
+  return typeMap[type] || type
+})
+
+// 输入数量
+const inputCount = computed(() => {
+  return props.skill.interactions?.length || 0
+})
+
+// 图标颜色 - 柔和的色调，不会太跳跃
+const iconColors = ['#8b5cf6', '#6366f1', '#8b5cf6', '#7c3aed', '#6d28d9']
+
+const iconColor = computed(() => {
+  const id = props.skill.id || 0
+  const index = (typeof id === 'number' ? id : id.charCodeAt(0)) % iconColors.length
+  return iconColors[index]
 })
 
 const handleEdit = (e: Event) => {
@@ -31,265 +78,343 @@ const handleEdit = (e: Event) => {
   emit('edit')
 }
 
-const tagColors = computed(() => {
-  return props.skill.tags.map(tag => {
-    switch (tag.toLowerCase()) {
-      case 'expert': return { bg: '#fef3c7', color: '#b45309' }
-      case 'public': return { bg: '#d1fae5', color: '#047857' }
-      case 'private': return { bg: '#fee2e2', color: '#b91c1c' }
-      case 'beta': return { bg: '#e0e7ff', color: '#4338ca' }
-      default: return { bg: '#f1f5f9', color: '#475569' }
-    }
-  })
-})
-
 const handleDelete = (e: Event) => {
   e.stopPropagation()
   emit('delete')
 }
 
-// 格式化时间
 const formatDate = (dateStr?: string) => {
   if (!dateStr) return ''
   const date = new Date(dateStr)
-  const now = new Date()
-  const diff = now.getTime() - date.getTime()
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-
-  if (days === 0) return '今天'
-  if (days === 1) return '昨天'
-  if (days < 7) return `${days}天前`
-  if (days < 30) return `${Math.floor(days / 7)}周前`
-
-  return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+  return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '.')
 }
 
-// 截断描述
-const shortDesc = computed(() => {
-  const desc = props.skill.description || ''
-  return desc.length > 30 ? desc.slice(0, 30) + '...' : desc
-})
+const showTooltip = ref(false)
+const tooltipStyle = ref({ top: '0px', left: '0px' })
+
+const handleMouseMove = (e: MouseEvent) => {
+  let left = e.clientX + 10
+  let top = e.clientY + 10
+  if (left + 200 > window.innerWidth) left = e.clientX - 210
+  if (top + 60 > window.innerHeight) top = e.clientY - 70
+  tooltipStyle.value = { top: `${top}px`, left: `${left}px` }
+}
+
+const handleMouseEnter = (e: MouseEvent) => {
+  handleMouseMove(e)
+  showTooltip.value = true
+}
+
+const handleMouseLeave = () => {
+  showTooltip.value = false
+}
 </script>
 
 <template>
-  <article class="card" :class="{ 'is-uploaded': !isEditable }">
-    <div class="card-actions">
-      <button v-if="isEditable" class="action-btn edit-btn" @click="handleEdit" title="编辑">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-        </svg>
-      </button>
-      <button class="action-btn del-btn" @click="handleDelete" title="删除">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M18 6L6 18M6 6l12 12"/>
-        </svg>
-      </button>
+  <article
+    class="card"
+    :class="{ 'is-uploaded': !isEditable }"
+    @mouseenter="handleMouseEnter"
+    @mousemove="handleMouseMove"
+    @mouseleave="handleMouseLeave"
+  >
+    <!-- 顶部栏：紧凑型 -->
+    <div class="header">
+      <span class="dot"></span>
+      <span class="title">{{ skill.name }}</span>
+      <div class="actions">
+        <span v-if="isEditable" class="action edit" @click="handleEdit">✎</span>
+        <span class="action del" @click="handleDelete">×</span>
+      </div>
     </div>
-    <div class="card-icon">{{ skill.icon }}</div>
-    <div class="card-body">
-      <div class="tags">
-        <span v-for="(tag, i) in skill.tags" :key="tag" class="tag" :style="{ background: tagColors[i]?.bg || '#f1f5f9', color: tagColors[i]?.color || '#475569' }">{{ tag }}</span>
+
+    <!-- 中间：主体内容区 -->
+    <div class="body">
+      <span class="icon" :style="{ background: iconColor }">{{ skill.icon }}</span>
+      <div class="info">
+        <div class="desc">{{ skill.description || '暂无描述' }}</div>
+        <span class="version">v{{ skill.version || '1.0' }}</span>
       </div>
-      <div class="title">{{ skill.name }}</div>
-      <div class="desc-wrapper">
-        <span class="desc">{{ shortDesc }}</span>
-        <div v-if="skill.description && skill.description.length > 30" class="tooltip">{{ skill.description }}</div>
-      </div>
-      <div class="meta">
-        <span :class="{ 'uploaded-badge': !isEditable }">
-          {{ isEditable ? skill.author : '📦 已上传' }}
+    </div>
+
+    <!-- 底部栏：两列布局 -->
+    <div class="footer">
+      <div class="footer-left">
+        <span class="type-tag" :class="isEditable ? 'self' : 'uploaded'">
+          {{ isEditable ? '自建' : '上传' }}
         </span>
-        <span v-if="skill.created_at" class="time">{{ formatDate(skill.created_at) }}</span>
-        <span class="ver">v{{ skill.version }}</span>
+        <span v-if="outputType" class="output-tag">{{ outputType }}</span>
+        <span v-if="inputCount > 0" class="input-tag">{{ inputCount }}输入</span>
+        <span v-if="skill.tags?.length" class="tag">{{ skill.tags[0] }}</span>
+      </div>
+      <div class="footer-right">
+        <template v-if="showAuthor">
+          <span class="author">{{ skill.author }}</span>
+          <span class="sep">·</span>
+        </template>
+        <span class="date">{{ formatDate(skill.created_at) }}</span>
       </div>
     </div>
+
+    <!-- Tooltip - 完整信息 -->
+    <Teleport to="body">
+      <div v-if="showTooltip" class="skill-tip" :style="tooltipStyle">
+        <div class="tip-title">{{ skill.name }}</div>
+        <div class="tip-desc">{{ skill.description || '暂无描述' }}</div>
+        <div class="tip-meta">
+          <span>版本: v{{ skill.version || '1.0' }}</span>
+          <span>作者: {{ skill.author || '-' }}</span>
+        </div>
+        <div v-if="skill.tags?.length" class="tip-tags">
+          标签: {{ skill.tags.join(', ') }}
+        </div>
+      </div>
+    </Teleport>
   </article>
 </template>
 
 <style scoped>
 .card {
-  flex: 1;
+  width: 100%;
+  height: 100%;
   background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  display: flex;
-  padding: 8px;
-  gap: 8px;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
   cursor: pointer;
-  transition: all 0.12s;
   overflow: hidden;
-  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  transition: box-shadow 0.2s, transform 0.15s;
 }
 
 .card:hover {
-  border-color: #818cf8;
-  box-shadow: 0 1px 4px rgba(99,102,241,0.1);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  transform: translateY(-1px);
 }
 
-/* 操作按钮组 */
-.card-actions {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  display: flex;
-  gap: 2px;
-  opacity: 0;
-  transition: all 0.12s;
-}
-
-.card:hover .card-actions { opacity: 1; }
-
-.action-btn {
-  width: 18px;
-  height: 18px;
-  background: #f3f4f6;
-  border: none;
-  border-radius: 4px;
-  color: #9ca3af;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.12s;
-}
-
-.action-btn svg {
-  width: 10px;
-  height: 10px;
-}
-
-.edit-btn:hover {
-  background: #e0e7ff;
-  color: #6366f1;
-}
-
-.del-btn:hover {
-  background: #fee2e2;
-  color: #dc2626;
-}
-
-/* 上传的卡片样式 */
 .card.is-uploaded {
   border-style: dashed;
+  border-color: #c9b8e0;
 }
 
-.uploaded-badge {
-  color: #8b5cf6;
-  font-weight: 500;
-}
-
-.card-icon {
-  width: 28px;
-  height: 28px;
-  background: #f8fafc;
-  border-radius: 5px;
+/* 顶部栏 - 紧凑 */
+.header {
   display: flex;
   align-items: center;
-  justify-content: center;
-  font-size: 14px;
+  gap: 6px;
+  padding: 4px 10px;
+  background: linear-gradient(135deg, #fef5f5 0%, #fdf8f8 100%);
+  border-bottom: 1px solid #f5e8e8;
   flex-shrink: 0;
 }
 
-.card-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.dot {
+  width: 6px;
+  height: 6px;
+  background: #e74c3c;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
-.tags {
-  display: flex;
-  gap: 2px;
-}
-
-.tag {
-  font-size: 7px;
-  font-weight: 700;
-  text-transform: uppercase;
-  padding: 1px 3px;
-  border-radius: 2px;
+.card.is-uploaded .dot {
+  background: #9b59b6;
 }
 
 .title {
+  flex: 1;
   font-size: 11px;
   font-weight: 600;
-  color: #111827;
+  color: #8e44ad;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.desc-wrapper {
-  position: relative;
+.actions {
+  display: flex;
+  gap: 4px;
+}
+
+.action {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.15s;
+}
+
+.action.edit {
+  color: #3498db;
+}
+
+.action.edit:hover {
+  background: rgba(52, 152, 219, 0.1);
+}
+
+.action.del {
+  color: #bdc3c7;
+  font-size: 14px;
+  font-weight: 300;
+}
+
+.action.del:hover {
+  color: #e74c3c;
+  background: rgba(231, 76, 60, 0.1);
+}
+
+/* 中间：主体内容区 */
+.body {
+  flex: 1;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
+.info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .desc {
-  font-size: 9px;
+  font-size: 11px;
+  color: #555;
   line-height: 1.3;
-  color: #6b7280;
-  overflow: hidden;
   white-space: nowrap;
+  overflow: hidden;
   text-overflow: ellipsis;
-  display: block;
 }
 
-.tooltip {
-  position: absolute;
-  left: 0;
-  top: 100%;
-  margin-top: 4px;
-  padding: 6px 10px;
-  background: #1e293b;
-  color: #f1f5f9;
-  font-size: 10px;
-  line-height: 1.4;
-  border-radius: 6px;
-  max-width: 180px;
-  width: max-content;
-  z-index: 100;
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(-4px);
-  transition: all 0.15s ease;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-  pointer-events: none;
+.version {
+  font-size: 9px;
+  color: #aaa;
 }
 
-.tooltip::before {
-  content: '';
-  position: absolute;
-  top: -4px;
-  left: 12px;
-  border: 4px solid transparent;
-  border-bottom-color: #1e293b;
-  border-top: none;
-}
-
-.desc-wrapper:hover .tooltip {
-  opacity: 1;
-  visibility: visible;
-  transform: translateY(0);
-}
-
-.meta {
+/* 底部栏 - 两列布局 */
+.footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 8px;
-  color: #9ca3af;
-  margin-top: auto;
+  padding: 6px 10px;
+  background: #fafafa;
+  border-top: 1px solid #f0f0f0;
+  flex-shrink: 0;
 }
 
-.time {
-  color: #94a3b8;
+.footer-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
 }
 
-.ver {
-  background: #f3f4f6;
-  padding: 0 3px;
-  border-radius: 2px;
-  margin-left: auto;
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.type-tag {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.type-tag.self {
+  background: #ede9fe;
+  color: #7c3aed;
+}
+
+.type-tag.uploaded {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.tag {
+  font-size: 9px;
+  padding: 2px 6px;
+  background: #f3f0ff;
+  color: #6b5b95;
+  border-radius: 10px;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.output-tag {
+  font-size: 9px;
+  padding: 2px 6px;
+  background: #fef3c7;
+  color: #b45309;
+  border-radius: 10px;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.input-tag {
+  font-size: 9px;
+  padding: 2px 6px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  border-radius: 10px;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.author {
+  font-size: 9px;
+  color: #888;
+  white-space: nowrap;
+}
+
+.sep {
+  font-size: 9px;
+  color: #ccc;
+}
+
+.date {
+  font-size: 9px;
+  color: #aaa;
+  white-space: nowrap;
+}
+</style>
+
+<style>
+.skill-tip {
+  position: fixed;
+  max-width: 200px;
+  padding: 8px 10px;
+  background: rgba(0,0,0,0.85);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.4;
+  border-radius: 6px;
+  z-index: 99999;
+  pointer-events: none;
 }
 </style>
