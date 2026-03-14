@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from models.workflow import Workflow
+from models.skill import Skill
 from schemas.workflow import WorkflowCreate, WorkflowUpdate
 
 
@@ -14,14 +15,67 @@ class WorkflowService:
     def get_by_id(self, workflow_id: str) -> Optional[Workflow]:
         return self.db.query(Workflow).filter(Workflow.id == workflow_id).first()
 
+    def _compute_io_from_nodes(self, nodes: List[dict], edges: List[dict]) -> Tuple[int, Optional[str]]:
+        """从节点和边计算输入数量和输出类型"""
+        if not nodes:
+            return 0, None
+
+        # 找到所有节点ID
+        node_ids = {n.get('id') for n in nodes}
+        # 找到有入边的节点
+        nodes_with_incoming = {e.get('to') for e in edges}
+        # 找到有出边的节点
+        nodes_with_outgoing = {e.get('from') for e in edges}
+
+        # 起始节点：没有入边的节点
+        start_nodes = [n for n in nodes if n.get('id') not in nodes_with_incoming]
+        # 结束节点：没有出边的节点
+        end_nodes = [n for n in nodes if n.get('id') not in nodes_with_outgoing]
+
+        input_count = 0
+        output_type = None
+
+        # 从起始节点的 skill 获取 interactions 数量
+        for node in start_nodes:
+            if node.get('type') == 'skill':
+                skill_name = node.get('name')
+                if skill_name:
+                    skill = self.db.query(Skill).filter(
+                        Skill.name == skill_name,
+                        Skill.status == 'active'
+                    ).first()
+                    if skill and skill.interactions:
+                        input_count += len(skill.interactions)
+
+        # 从结束节点的 skill 获取 output_type
+        for node in end_nodes:
+            if node.get('type') == 'skill':
+                skill_name = node.get('name')
+                if skill_name:
+                    skill = self.db.query(Skill).filter(
+                        Skill.name == skill_name,
+                        Skill.status == 'active'
+                    ).first()
+                    if skill and skill.output_config:
+                        output_type = skill.output_config.get('preferred_type')
+                        break  # 使用第一个找到的输出类型
+
+        return input_count, output_type
+
     def create(self, workflow_data: WorkflowCreate) -> Workflow:
+        nodes = workflow_data.nodes or []
+        edges = workflow_data.edges or []
+        input_count, output_type = self._compute_io_from_nodes(nodes, edges)
+
         workflow = Workflow(
             id=workflow_data.id,
             name=workflow_data.name,
             description=workflow_data.description,
             icon=workflow_data.icon,
-            nodes=workflow_data.nodes or [],
-            edges=workflow_data.edges or []
+            nodes=nodes,
+            edges=edges,
+            input_count=input_count,
+            output_type=output_type
         )
         self.db.add(workflow)
         self.db.commit()
@@ -36,6 +90,13 @@ class WorkflowService:
         update_data = workflow_data.model_dump(exclude_unset=True)
         for key, value in update_data.items():
             setattr(workflow, key, value)
+
+        # 重新计算输入输出
+        nodes = workflow.nodes or []
+        edges = workflow.edges or []
+        input_count, output_type = self._compute_io_from_nodes(nodes, edges)
+        workflow.input_count = input_count
+        workflow.output_type = output_type
 
         self.db.commit()
         self.db.refresh(workflow)

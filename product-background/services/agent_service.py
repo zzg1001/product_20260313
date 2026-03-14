@@ -27,8 +27,13 @@ class AgentService:
         self.client = anthropic.Anthropic(**client_kwargs)
         self.model = settings.claude_model
 
-    def _get_skills_context(self, skill_ids: Optional[List[str]] = None) -> str:
-        """Get skills information for AI context"""
+    def _get_skills_context(self, skill_ids: Optional[List[str]] = None, load_full_content: bool = False) -> str:
+        """Get skills information for AI context
+
+        Args:
+            skill_ids: List of skill IDs to filter by
+            load_full_content: If True, load full SKILL.md content for each skill
+        """
         query = self.db.query(Skill)
         if skill_ids:
             query = query.filter(Skill.id.in_(skill_ids))
@@ -46,6 +51,17 @@ class AgentService:
                 info += f", Tags: {', '.join(skill.tags)}"
             skills_info.append(info)
 
+            # Load full SKILL.md content if requested and skill has folder
+            if load_full_content and skill.folder_path:
+                skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
+                skill_md_path = skill_folder / "SKILL.md"
+                if skill_md_path.exists():
+                    try:
+                        skill_md_content = skill_md_path.read_text(encoding="utf-8")
+                        skills_info.append(f"\n--- Full content for {skill.name} ---\n{skill_md_content}\n---\n")
+                    except Exception as e:
+                        print(f"[AgentService] Error reading SKILL.md for {skill.name}: {e}")
+
         return "Available skills:\n" + "\n".join(skills_info)
 
     async def chat(
@@ -55,7 +71,9 @@ class AgentService:
         skill_ids: Optional[List[str]] = None
     ) -> str:
         """Simple chat with Claude AI"""
-        skills_context = self._get_skills_context(skill_ids)
+        # Load full content when specific skills are provided
+        load_full = skill_ids is not None and len(skill_ids) > 0
+        skills_context = self._get_skills_context(skill_ids, load_full_content=load_full)
 
         system_prompt = f"""你是一个智能AI Agent，能够分析用户需求并规划技能（Skills）执行流程。
 
@@ -94,7 +112,9 @@ class AgentService:
         skill_ids: Optional[List[str]] = None
     ) -> AsyncGenerator[str, None]:
         """Stream chat response from Claude AI"""
-        skills_context = self._get_skills_context(skill_ids)
+        # Load full content when specific skills are provided
+        load_full = skill_ids is not None and len(skill_ids) > 0
+        skills_context = self._get_skills_context(skill_ids, load_full_content=load_full)
 
         system_prompt = f"""你是一个智能AI Agent，能够分析用户需求并规划技能（Skills）执行流程。
 
@@ -526,3 +546,141 @@ If no suitable skills are found, return an empty plan with an explanation."""
             traceback.print_exc()
             print(f"{'!'*60}\n")
             return False, None, f"AI fallback execution failed: {str(e)}", None
+
+    def execute_temp_skill(
+        self,
+        temp_folder: Path,
+        skill_name: str,
+        script_name: Optional[str] = None,
+        params: Dict[str, Any] = None
+    ) -> tuple[bool, Any, Optional[str], Optional[str]]:
+        """
+        执行临时技能（用于测试）
+
+        Args:
+            temp_folder: 临时技能文件夹路径
+            skill_name: 技能名称
+            script_name: 脚本文件名（可选）
+            params: 执行参数
+
+        Returns:
+            (success, result, error, output)
+        """
+        import traceback
+
+        print(f"\n{'='*60}")
+        print(f"[Temp Skill Execute] Starting temp skill execution")
+        print(f"[Temp Skill Execute] Folder: {temp_folder}")
+        print(f"[Temp Skill Execute] Name: {skill_name}")
+        print(f"{'='*60}")
+
+        if not temp_folder.exists():
+            return False, None, "临时技能文件夹不存在", None
+
+        # 查找可执行脚本
+        script_file = script_name or "main.py"
+        script_path = temp_folder / script_file
+
+        if not script_path.exists():
+            # 尝试查找任意 .py 文件
+            py_files = [f for f in temp_folder.glob("*.py") if f.name != "__init__.py"]
+            if py_files:
+                script_path = py_files[0]
+            else:
+                # 检查 SKILL.md（AI 型技能）
+                skill_md_path = temp_folder / "SKILL.md"
+                if skill_md_path.exists():
+                    return self._execute_temp_skill_with_ai(temp_folder, skill_name, params)
+                else:
+                    return False, None, "未找到可执行脚本", None
+
+        # 读取并执行脚本
+        try:
+            code = script_path.read_text(encoding="utf-8")
+        except Exception as e:
+            return False, None, f"读取脚本失败: {e}", None
+
+        # 执行脚本
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        sys.stdout = StringIO()
+        sys.stderr = StringIO()
+
+        try:
+            exec_globals = {
+                "params": params or {},
+                "SKILL_DIR": temp_folder,
+                "pd": pd,
+                "pandas": pd,
+                "OUTPUTS_DIR": OUTPUTS_DIR,
+                "generate_unique_filename": generate_unique_filename,
+                "Path": Path,
+            }
+            exec_globals["__builtins__"] = __builtins__
+
+            exec(code, exec_globals)
+
+            result = exec_globals.get("result")
+            stdout_output = sys.stdout.getvalue()
+
+            return True, result, None, stdout_output
+
+        except Exception as e:
+            stderr_output = sys.stderr.getvalue()
+            stdout_output = sys.stdout.getvalue()
+            output = stdout_output + ("\n" + stderr_output if stderr_output else "")
+            traceback.print_exc()
+            return False, None, f"{type(e).__name__}: {str(e)}", output
+
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+
+    def _execute_temp_skill_with_ai(
+        self,
+        temp_folder: Path,
+        skill_name: str,
+        params: Dict[str, Any] = None
+    ) -> tuple[bool, Any, Optional[str], Optional[str]]:
+        """
+        使用 AI 执行临时技能
+        """
+        try:
+            skill_md_path = temp_folder / "SKILL.md"
+            skill_md_content = skill_md_path.read_text(encoding="utf-8")
+
+            context = params.get("context", "") if params else ""
+            user_input = context or params.get("input", "") if params else ""
+
+            system_prompt = f"""你是一个专业的 AI 助手，正在测试名为「{skill_name}」的技能。
+
+## 技能说明
+{skill_md_content[:8000]}
+
+## 任务要求
+根据技能说明和用户需求，生成高质量的输出。
+
+## 输出格式
+直接输出结果内容。
+"""
+
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=4000,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_input or "请根据技能说明执行测试任务"}]
+            )
+
+            ai_output = response.content[0].text
+            result = {
+                "message": f"AI 测试「{skill_name}」完成",
+                "skill_type": "ai_temp",
+                "content": ai_output
+            }
+
+            return True, result, None, ai_output
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return False, None, f"AI 执行失败: {str(e)}", None

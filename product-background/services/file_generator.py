@@ -64,6 +64,15 @@ try:
 except ImportError:
     HAS_YAML = False
 
+# Excel 处理 (openpyxl)
+try:
+    import openpyxl
+    HAS_OPENPYXL = True
+    print(f"[FileGenerator] openpyxl version: {openpyxl.__version__}")
+except ImportError:
+    HAS_OPENPYXL = False
+    print("[FileGenerator] WARNING: openpyxl not installed, Excel generation may fail")
+
 
 # ============================================================
 # 文件类型定义
@@ -553,52 +562,83 @@ class FileGenerator:
     def _generate_docx(self, title: str, content: str, extra_data: Dict = None) -> Tuple[str, str, str]:
         """生成 Word 文档"""
         if not HAS_DOCX:
+            print(f"[Docx] python-docx not installed, falling back to HTML")
             return self._generate_html(title, content, extra_data)
 
         filename = generate_unique_filename("output", "docx")
         filepath = self.output_dir / filename
 
-        doc = Document()
-        doc.add_heading(title, level=0)
+        print(f"[Docx] Generating Word document: {filename}")
+        print(f"[Docx] Title: {title}")
+        print(f"[Docx] Content type: {type(content)}, length: {len(str(content)) if content else 0}")
 
-        if content:
-            paragraphs = content.split('\n\n')
-            for para in paragraphs:
-                para = para.strip()
-                if not para:
-                    continue
+        try:
+            doc = Document()
+            doc.add_heading(title, level=0)
 
-                if para.startswith('# '):
-                    doc.add_heading(para[2:], level=1)
-                elif para.startswith('## '):
-                    doc.add_heading(para[3:], level=2)
-                elif para.startswith('### '):
-                    doc.add_heading(para[4:], level=3)
-                elif para.startswith('- ') or para.startswith('* '):
-                    lines = para.split('\n')
-                    for line in lines:
-                        line = line.strip()
-                        if line.startswith('- ') or line.startswith('* '):
-                            doc.add_paragraph(line[2:], style='List Bullet')
-                        elif line:
-                            doc.add_paragraph(line)
-                elif para.startswith('```'):
-                    code_content = para.strip('`').split('\n', 1)
-                    if len(code_content) > 1:
-                        code_para = doc.add_paragraph()
-                        code_para.style = 'No Spacing'
-                        run = code_para.add_run(code_content[1].rstrip('`'))
-                        run.font.name = 'Consolas'
-                        run.font.size = DocxPt(10)
-                else:
-                    doc.add_paragraph(para)
+            # 处理内容
+            if content:
+                # 确保 content 是字符串
+                if isinstance(content, (dict, list)):
+                    content = json.dumps(content, ensure_ascii=False, indent=2)
+                elif not isinstance(content, str):
+                    content = str(content)
 
-        doc.add_paragraph()
-        doc.add_paragraph(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                paragraphs = content.split('\n\n')
+                for para in paragraphs:
+                    para = para.strip()
+                    if not para:
+                        continue
 
-        doc.save(str(filepath))
-        size = filepath.stat().st_size
-        return filename, f"/outputs/{filename}", _format_size(size)
+                    try:
+                        if para.startswith('# '):
+                            doc.add_heading(para[2:], level=1)
+                        elif para.startswith('## '):
+                            doc.add_heading(para[3:], level=2)
+                        elif para.startswith('### '):
+                            doc.add_heading(para[4:], level=3)
+                        elif para.startswith('- ') or para.startswith('* '):
+                            lines = para.split('\n')
+                            for line in lines:
+                                line = line.strip()
+                                if line.startswith('- ') or line.startswith('* '):
+                                    doc.add_paragraph(line[2:], style='List Bullet')
+                                elif line:
+                                    doc.add_paragraph(line)
+                        elif para.startswith('```'):
+                            code_content = para.strip('`').split('\n', 1)
+                            if len(code_content) > 1:
+                                code_para = doc.add_paragraph()
+                                code_para.style = 'No Spacing'
+                                run = code_para.add_run(code_content[1].rstrip('`'))
+                                run.font.name = 'Consolas'
+                                run.font.size = DocxPt(10)
+                        else:
+                            doc.add_paragraph(para)
+                    except Exception as e:
+                        print(f"[Docx] Error processing paragraph: {e}")
+                        # 直接添加为普通段落
+                        doc.add_paragraph(para)
+
+            doc.add_paragraph()
+            doc.add_paragraph(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+            doc.save(str(filepath))
+
+            # 验证文件
+            size = filepath.stat().st_size
+            if size < 1000:  # docx 文件应该至少有几 KB
+                print(f"[Docx] WARNING: File seems too small ({size} bytes)")
+
+            print(f"[Docx] Successfully generated: {filename}, size: {size}")
+            return filename, f"/outputs/{filename}", _format_size(size)
+
+        except Exception as e:
+            print(f"[Docx] Error generating docx: {e}")
+            import traceback
+            traceback.print_exc()
+            # 回退到 HTML
+            return self._generate_html(title, str(content) if content else "", extra_data)
 
     def _generate_pdf(self, title: str, content: str, extra_data: Dict = None) -> Tuple[str, str, str]:
         """生成 PDF 文件"""
@@ -682,26 +722,174 @@ class FileGenerator:
         filename = generate_unique_filename("output", "xlsx")
         filepath = self.output_dir / filename
 
+        print(f"[Excel] Generating Excel file: {filename}")
+        print(f"[Excel] Input data type: {type(data)}")
+
+        df = None
+
         if isinstance(data, pd.DataFrame):
             df = data
+            print(f"[Excel] Using DataFrame directly, shape: {df.shape}")
         elif isinstance(data, list) and len(data) > 0:
             if isinstance(data[0], dict):
                 df = pd.DataFrame(data)
-            else:
+                print(f"[Excel] Created DataFrame from list of dicts, shape: {df.shape}")
+            elif isinstance(data[0], list):
                 if len(data) > 1:
                     df = pd.DataFrame(data[1:], columns=data[0])
                 else:
                     df = pd.DataFrame(data)
+                print(f"[Excel] Created DataFrame from list of lists, shape: {df.shape}")
+            else:
+                df = pd.DataFrame({"数据": data})
+                print(f"[Excel] Created DataFrame from simple list, shape: {df.shape}")
         elif isinstance(data, dict):
-            df = pd.DataFrame([data])
+            # 检查是否是嵌套的数据结构
+            if any(isinstance(v, (list, dict)) for v in data.values()):
+                # 尝试将字典转换为表格格式
+                try:
+                    df = pd.DataFrame([data])
+                except Exception:
+                    # 如果失败，转换为简单的键值对
+                    df = pd.DataFrame([(k, str(v)) for k, v in data.items()], columns=["键", "值"])
+            else:
+                df = pd.DataFrame([data])
+            print(f"[Excel] Created DataFrame from dict, shape: {df.shape}")
         elif isinstance(data, str):
-            # 尝试解析字符串内容
-            df = pd.DataFrame({"内容": [data]})
+            # 尝试解析字符串
+            data_str = data.strip()
+            parsed = False
+
+            # 尝试解析为 JSON
+            if data_str.startswith('[') or data_str.startswith('{'):
+                try:
+                    parsed_data = json.loads(data_str)
+                    if isinstance(parsed_data, list):
+                        df = pd.DataFrame(parsed_data)
+                    elif isinstance(parsed_data, dict):
+                        df = pd.DataFrame([parsed_data])
+                    parsed = True
+                    print(f"[Excel] Parsed string as JSON, shape: {df.shape}")
+                except json.JSONDecodeError:
+                    pass
+
+            # 尝试解析为 CSV
+            if not parsed and (',' in data_str or '\t' in data_str):
+                try:
+                    from io import StringIO
+                    # 尝试逗号分隔
+                    df = pd.read_csv(StringIO(data_str))
+                    if df.shape[1] > 1:
+                        parsed = True
+                        print(f"[Excel] Parsed string as CSV, shape: {df.shape}")
+                except Exception:
+                    pass
+
+            if not parsed:
+                # 按行分割
+                lines = data_str.split('\n')
+                if len(lines) > 1:
+                    df = pd.DataFrame({"内容": lines})
+                else:
+                    df = pd.DataFrame({"内容": [data_str]})
+                print(f"[Excel] Created DataFrame from text lines, shape: {df.shape}")
         else:
             df = pd.DataFrame({"结果": [str(data)]})
+            print(f"[Excel] Created DataFrame from unknown type, shape: {df.shape}")
+
+        # 确保 DataFrame 不为空
+        if df is None or df.empty:
+            df = pd.DataFrame({"信息": ["无数据"]})
+            print(f"[Excel] DataFrame was empty, using placeholder")
+
+        # 清理数据：确保所有值都是可序列化的
+        for col in df.columns:
+            df[col] = df[col].apply(lambda x: str(x) if isinstance(x, (dict, list)) else x)
+
+        # 处理列名：确保不包含非法字符
+        df.columns = [str(col).replace('\n', ' ').replace('\r', ' ')[:255] for col in df.columns]
 
         sheet_name = extra_data.get("sheet_name", "Sheet1") if extra_data else "Sheet1"
-        df.to_excel(filepath, index=False, engine='openpyxl', sheet_name=sheet_name)
+        # 确保 sheet_name 有效
+        sheet_name = str(sheet_name)[:31].replace('/', '-').replace('\\', '-').replace('*', '-').replace('?', '-').replace('[', '-').replace(']', '-')
+
+        print(f"[Excel] DataFrame columns: {list(df.columns)}")
+        print(f"[Excel] DataFrame shape: {df.shape}")
+        print(f"[Excel] Sheet name: {sheet_name}")
+
+        # 检查 openpyxl 是否可用
+        if not HAS_OPENPYXL:
+            print(f"[Excel] openpyxl not available, falling back to CSV")
+            csv_filename = filename.replace('.xlsx', '.csv')
+            csv_filepath = self.output_dir / csv_filename
+            df.to_csv(csv_filepath, index=False, encoding='utf-8-sig')
+            size = csv_filepath.stat().st_size
+            return csv_filename, f"/outputs/{csv_filename}", _format_size(size)
+
+        try:
+            # 使用 openpyxl 直接创建工作簿（更可靠）
+            from openpyxl import Workbook
+            from openpyxl.utils.dataframe import dataframe_to_rows
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = sheet_name
+
+            # 写入数据
+            for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=True), 1):
+                for c_idx, value in enumerate(row, 1):
+                    # 确保值可以写入 Excel
+                    if value is None:
+                        ws.cell(row=r_idx, column=c_idx, value="")
+                    elif isinstance(value, (dict, list)):
+                        ws.cell(row=r_idx, column=c_idx, value=str(value))
+                    else:
+                        try:
+                            ws.cell(row=r_idx, column=c_idx, value=value)
+                        except Exception:
+                            ws.cell(row=r_idx, column=c_idx, value=str(value))
+
+            # 保存文件
+            wb.save(str(filepath))
+            wb.close()
+
+            print(f"[Excel] Successfully wrote Excel file with openpyxl Workbook")
+
+            # 验证文件是否有效
+            file_size = filepath.stat().st_size
+            print(f"[Excel] File size: {file_size} bytes")
+
+            if file_size < 2000:  # 有效的 xlsx 文件通常至少有几 KB
+                print(f"[Excel] WARNING: File seems too small, verifying...")
+                # 尝试重新打开验证
+                try:
+                    test_wb = openpyxl.load_workbook(str(filepath))
+                    test_wb.close()
+                    print(f"[Excel] File validation passed")
+                except Exception as ve:
+                    print(f"[Excel] File validation failed: {ve}")
+                    raise ve
+
+        except Exception as e:
+            print(f"[Excel] Error writing with openpyxl: {e}")
+            import traceback
+            traceback.print_exc()
+
+            # 尝试使用 pandas 的 to_excel
+            try:
+                print(f"[Excel] Trying pandas to_excel...")
+                df.to_excel(filepath, index=False, engine='openpyxl', sheet_name=sheet_name)
+                print(f"[Excel] Successfully wrote with pandas to_excel")
+            except Exception as e2:
+                print(f"[Excel] pandas to_excel also failed: {e2}")
+
+                # 最后回退：保存为 CSV
+                csv_filename = filename.replace('.xlsx', '.csv')
+                csv_filepath = self.output_dir / csv_filename
+                df.to_csv(csv_filepath, index=False, encoding='utf-8-sig')
+                print(f"[Excel] Fallback to CSV: {csv_filename}")
+                size = csv_filepath.stat().st_size
+                return csv_filename, f"/outputs/{csv_filename}", _format_size(size)
 
         size = filepath.stat().st_size
         return filename, f"/outputs/{filename}", _format_size(size)

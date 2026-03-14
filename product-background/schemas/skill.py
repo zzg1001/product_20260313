@@ -62,6 +62,7 @@ class SkillUpdate(BaseModel):
 class SkillResponse(BaseModel):
     """技能响应"""
     id: str  # UUID
+    group_id: str  # 版本组ID
     name: str
     description: Optional[str] = None
     icon: Optional[str] = None
@@ -70,10 +71,23 @@ class SkillResponse(BaseModel):
     entry_script: Optional[str] = None
     author: Optional[str] = None
     version: Optional[str] = None
+    status: str = "active"  # active/deprecated
     interactions: Optional[List[SkillInteraction]] = None
     output_config: Optional[OutputConfig] = None  # 输出配置
+    original_created_at: Optional[datetime] = None  # 原始创建时间
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class SkillVersionResponse(BaseModel):
+    """技能版本信息（用于历史版本列表）"""
+    id: str
+    version: str
+    status: str
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

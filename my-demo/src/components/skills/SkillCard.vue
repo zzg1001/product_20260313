@@ -64,6 +64,12 @@ const inputCount = computed(() => {
   return props.skill.interactions?.length || 0
 })
 
+// 显示的标签（最多显示3个）
+const displayTags = computed(() => {
+  const tags = props.skill.tags || []
+  return tags.slice(0, 3)
+})
+
 // 图标颜色 - 柔和的色调，不会太跳跃
 const iconColors = ['#8b5cf6', '#6366f1', '#8b5cf6', '#7c3aed', '#6d28d9']
 
@@ -120,7 +126,9 @@ const handleMouseLeave = () => {
   >
     <!-- 顶部栏：紧凑型 -->
     <div class="header">
-      <span class="dot"></span>
+      <span class="type-badge" :class="isEditable ? 'self' : 'uploaded'">
+        {{ isEditable ? 'SELF' : 'UPLOAD' }}
+      </span>
       <span class="title">{{ skill.name }}</span>
       <div class="actions">
         <span v-if="isEditable" class="action edit" @click="handleEdit">✎</span>
@@ -137,15 +145,12 @@ const handleMouseLeave = () => {
       </div>
     </div>
 
-    <!-- 底部栏：两列布局 -->
+    <!-- 底部栏：一行 -->
     <div class="footer">
-      <div class="footer-left">
-        <span class="type-tag" :class="isEditable ? 'self' : 'uploaded'">
-          {{ isEditable ? '自建' : '上传' }}
-        </span>
-        <span v-if="outputType" class="output-tag">{{ outputType }}</span>
-        <span v-if="inputCount > 0" class="input-tag">{{ inputCount }}输入</span>
-        <span v-if="skill.tags?.length" class="tag">{{ skill.tags[0] }}</span>
+      <div class="capability-tags">
+        <span v-if="inputCount > 0" class="cap-tag input">{{ inputCount }}个输入</span>
+        <span v-if="outputType" class="cap-tag output">{{ outputType }}</span>
+        <span v-for="(tag, idx) in displayTags" :key="tag" class="cap-tag" :class="'color-' + (idx % 4)">{{ tag }}</span>
       </div>
       <div class="footer-right">
         <template v-if="showAuthor">
@@ -209,16 +214,23 @@ const handleMouseLeave = () => {
   flex-shrink: 0;
 }
 
-.dot {
-  width: 6px;
-  height: 6px;
-  background: #e74c3c;
-  border-radius: 50%;
+.type-badge {
+  font-size: 8px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
   flex-shrink: 0;
 }
 
-.card.is-uploaded .dot {
+.type-badge.self {
+  background: #e74c3c;
+  color: #fff;
+}
+
+.type-badge.uploaded {
   background: #9b59b6;
+  color: #fff;
 }
 
 .title {
@@ -313,77 +325,72 @@ const handleMouseLeave = () => {
   color: #aaa;
 }
 
-/* 底部栏 - 两列布局 */
+/* 底部栏 - 一行 */
 .footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   padding: 6px 10px;
   background: #fafafa;
   border-top: 1px solid #f0f0f0;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-.footer-left {
+.capability-tags {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
   overflow: hidden;
 }
 
-.footer-right {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.type-tag {
+.cap-tag {
   font-size: 9px;
-  padding: 2px 6px;
-  border-radius: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
   white-space: nowrap;
   font-weight: 500;
 }
 
-.type-tag.self {
-  background: #ede9fe;
+/* 输出类型 - 橙色系 */
+.cap-tag.output {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+/* 输入数 - 蓝色系 */
+.cap-tag.input {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+/* 和谐配色 - 柔和色调 */
+.cap-tag.color-0 {
+  background: #f3e8ff;
   color: #7c3aed;
 }
 
-.type-tag.uploaded {
+.cap-tag.color-1 {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.cap-tag.color-2 {
   background: #dcfce7;
   color: #15803d;
 }
 
-.tag {
-  font-size: 9px;
-  padding: 2px 6px;
-  background: #f3f0ff;
-  color: #6b5b95;
-  border-radius: 10px;
-  white-space: nowrap;
-  font-weight: 500;
+.cap-tag.color-3 {
+  background: #fce7f3;
+  color: #be185d;
 }
 
-.output-tag {
-  font-size: 9px;
-  padding: 2px 6px;
-  background: #fef3c7;
-  color: #b45309;
-  border-radius: 10px;
-  white-space: nowrap;
-  font-weight: 500;
-}
-
-.input-tag {
-  font-size: 9px;
-  padding: 2px 6px;
-  background: #dbeafe;
-  color: #1d4ed8;
-  border-radius: 10px;
-  white-space: nowrap;
-  font-weight: 500;
+.footer-right {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .author {

@@ -15,6 +15,7 @@ DROP TABLE IF EXISTS `skills`;
 -- ============================================
 CREATE TABLE `skills` (
     `id` VARCHAR(36) NOT NULL COMMENT '技能ID (UUID)',
+    `group_id` VARCHAR(36) NOT NULL COMMENT '版本组ID（同一技能的所有版本共用）',
     `name` VARCHAR(100) NOT NULL COMMENT '技能名称',
     `description` TEXT COMMENT '技能描述',
     `icon` VARCHAR(50) DEFAULT '⚡' COMMENT '图标（emoji或图标名）',
@@ -23,13 +24,17 @@ CREATE TABLE `skills` (
     `entry_script` VARCHAR(100) DEFAULT 'main.py' COMMENT '入口脚本文件名',
     `author` VARCHAR(50) COMMENT '作者',
     `version` VARCHAR(20) DEFAULT '1.0.0' COMMENT '版本号',
+    `status` ENUM('active', 'deprecated') DEFAULT 'active' COMMENT '状态：active=当前版本，deprecated=历史版本',
     `interactions` JSON COMMENT '交互配置列表',
     `output_config` JSON COMMENT '输出文件配置: {enabled: bool, preferred_type: string, filename_template: string}',
-    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `original_created_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '原始创建时间（首个版本的创建时间，用于排序）',
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '本版本创建时间',
     `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     PRIMARY KEY (`id`),
+    INDEX `idx_skills_group_id` (`group_id`),
     INDEX `idx_skills_name` (`name`),
-    INDEX `idx_skills_created_at` (`created_at`)
+    INDEX `idx_skills_status` (`status`),
+    INDEX `idx_skills_original_created_at` (`original_created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='技能表';
 
 
@@ -43,6 +48,8 @@ CREATE TABLE `workflows` (
     `icon` VARCHAR(50) DEFAULT '🔄' COMMENT '图标',
     `nodes` JSON COMMENT '节点列表',
     `edges` JSON COMMENT '边列表',
+    `input_count` INT DEFAULT 0 COMMENT '输入数量（开头节点的interactions数）',
+    `output_type` VARCHAR(50) COMMENT '输出类型（结尾节点的output类型）',
     `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     PRIMARY KEY (`id`),

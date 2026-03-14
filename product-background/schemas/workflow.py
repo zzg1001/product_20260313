@@ -26,6 +26,8 @@ class WorkflowUpdate(BaseModel):
 
 
 class WorkflowResponse(WorkflowBase):
+    input_count: int = 0  # 开头节点的输入数
+    output_type: Optional[str] = None  # 结尾节点的输出类型
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

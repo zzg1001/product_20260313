@@ -72,12 +72,15 @@ interface OutputConfig {
 // Skill 类型定义
 interface Skill {
   id: string  // UUID
+  group_id?: string  // 版本组ID
   name: string
   description: string
   tags: string[]
   icon: string
   author: string
   version: string
+  status?: string  // active/deprecated
+  original_created_at?: string  // 原始创建时间
   created_at?: string
   folder_path?: string
   entry_script?: string
@@ -94,15 +97,26 @@ const loadSkills = async () => {
   skillsError.value = null
   try {
     const apiSkills = await skillsApi.getAll()
-    skills.value = apiSkills.map(s => ({
+    // 按原始创建时间升序排序（最早的在前面，版本更新不影响位置）
+    const sortedSkills = [...apiSkills].sort((a, b) => {
+      const timeA = new Date(a.original_created_at || a.created_at).getTime()
+      const timeB = new Date(b.original_created_at || b.created_at).getTime()
+      return timeA - timeB
+    })
+    skills.value = sortedSkills.map(s => ({
       id: s.id,
+      group_id: s.group_id,
       name: s.name,
       description: s.description || '',
       tags: s.tags || [],
       icon: s.icon || '⚡',
       author: s.author || 'unknown',
       version: s.version || '1.0.0',
-      created_at: s.created_at
+      status: s.status || 'active',
+      original_created_at: s.original_created_at,
+      created_at: s.created_at,
+      interactions: s.interactions || [],
+      output_config: s.output_config || null
     }))
   } catch (error: any) {
     console.error('Failed to load skills:', error)
@@ -179,6 +193,42 @@ const loadWorkflows = async () => {
     workflows.value = []
   } finally {
     isLoadingWorkflows.value = false
+  }
+}
+
+// 获取workflow的输入输出信息
+const getWorkflowIO = (workflow: Workflow) => {
+  let totalInputs = 0
+  let outputType: string | null = null
+
+  // 遍历nodes，从skills中查找对应的skill信息
+  for (const node of workflow.nodes) {
+    const skill = skills.value.find(s => s.name === node.name)
+    if (skill) {
+      // 累计输入数量
+      totalInputs += skill.interactions?.length || 0
+      // 获取输出类型（取最后一个有输出配置的节点）
+      if (skill.output_config?.preferred_type) {
+        outputType = skill.output_config.preferred_type
+      }
+    }
+  }
+
+  // 输出类型映射
+  const typeMap: Record<string, string> = {
+    'html': '网页',
+    'pdf': 'PDF',
+    'xlsx': 'Excel',
+    'docx': 'Word',
+    'png': '图片',
+    'json': 'JSON',
+    'txt': '文本',
+    'md': 'Markdown'
+  }
+
+  return {
+    inputCount: totalInputs,
+    outputType: outputType ? (typeMap[outputType] || outputType) : null
   }
 }
 
@@ -1206,52 +1256,55 @@ onUnmounted(() => {
             </div>
             <!-- 工作流卡片网格 -->
             <div v-else class="workflows-grid">
-              <!-- 工作流卡片 -->
-              <div
+              <!-- 工作流卡片 - 类似SkillCard样式 -->
+              <article
                 v-for="workflow in workflows"
                 :key="workflow.id"
-                class="wf-tile"
+                class="wf-card"
                 @click="runWorkflow(workflow)"
                 @mouseenter="(e) => handleWfMouseMove(e, workflow)"
                 @mousemove="(e) => handleWfMouseMove(e, workflow)"
                 @mouseleave="handleWfMouseLeave"
               >
-                <!-- 图标 -->
-                <div class="wf-tile-icon">{{ workflow.icon || '⚡' }}</div>
-                <!-- 名称 -->
-                <div class="wf-tile-name">{{ workflow.name }}</div>
-                <!-- 步骤数 -->
-                <div class="wf-tile-meta">{{ workflow.nodes.length }} 步骤</div>
-
-                <!-- 操作按钮 -->
-                <div class="wf-tile-actions">
-                  <button class="tile-btn run" title="运行" @click.stop="runWorkflow(workflow)">
-                    <svg viewBox="0 0 24 24" fill="currentColor">
-                      <polygon points="5 3 19 12 5 21 5 3"/>
-                    </svg>
-                  </button>
-                  <button class="tile-btn edit" @click.stop="openEditWorkflow(workflow)" title="编辑">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/>
-                    </svg>
-                  </button>
-                  <button class="tile-btn delete" @click.stop="deleteWorkflow(workflow.id)" title="删除">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M18 6L6 18M6 6l12 12"/>
-                    </svg>
-                  </button>
+                <!-- 顶部栏 -->
+                <div class="wf-header">
+                  <span class="wf-title">{{ workflow.name }}</span>
+                  <div class="wf-actions">
+                    <span class="wf-action run" title="运行" @click.stop="runWorkflow(workflow)">▶</span>
+                    <span class="wf-action edit" @click.stop="openEditWorkflow(workflow)" title="编辑">✎</span>
+                    <span class="wf-action del" @click.stop="deleteWorkflow(workflow.id)" title="删除">×</span>
+                  </div>
                 </div>
-              </div>
+
+                <!-- 中间主体 -->
+                <div class="wf-body">
+                  <span class="wf-icon">{{ workflow.icon || '🔄' }}</span>
+                  <div class="wf-info">
+                    <div class="wf-desc">{{ workflow.description || '点击运行工作流' }}</div>
+                    <span class="wf-steps">{{ workflow.nodes.length }} 步骤</span>
+                  </div>
+                </div>
+
+                <!-- 底部栏 -->
+                <div class="wf-footer">
+                  <div class="wf-tags">
+                    <span class="wf-tag">{{ workflow.nodes.length }}步骤</span>
+                    <span v-if="getWorkflowIO(workflow).inputCount > 0" class="wf-tag input">
+                      {{ getWorkflowIO(workflow).inputCount }}个输入
+                    </span>
+                    <span v-if="getWorkflowIO(workflow).outputType" class="wf-tag output">
+                      {{ getWorkflowIO(workflow).outputType }}
+                    </span>
+                  </div>
+                </div>
+              </article>
 
               <!-- 添加新工作流 -->
-              <div class="wf-tile wf-tile-add" @click="openCreateWorkflow">
-                <div class="wf-tile-icon add-icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="12" y1="5" x2="12" y2="19"/>
-                    <line x1="5" y1="12" x2="19" y2="12"/>
-                  </svg>
+              <div class="wf-card wf-card-add" @click="openCreateWorkflow">
+                <div class="wf-add-content">
+                  <span class="wf-add-icon">+</span>
+                  <span class="wf-add-text">新建工作流</span>
                 </div>
-                <div class="wf-tile-name">新建工作流</div>
               </div>
             </div>
           </div>
@@ -2355,177 +2408,219 @@ onUnmounted(() => {
 }
 
 /* 工作流方块 */
-.wf-tile {
-  position: relative;
-  aspect-ratio: 1;
+/* Workflow 卡片 - 类似 SkillCard 样式 */
+.wf-card {
   background: #fff;
-  border-radius: 16px;
-  border: 1px solid #e8ecf1;
-  padding: 16px;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  cursor: pointer;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
+  transition: box-shadow 0.2s, transform 0.15s;
+}
+
+.wf-card:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  transform: translateY(-1px);
+}
+
+/* 顶部栏 */
+.wf-header {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 10px;
-  cursor: pointer;
-  transition: all 0.25s ease;
-  overflow: visible;
-  z-index: 1;
+  gap: 6px;
+  padding: 4px 10px;
+  background: linear-gradient(135deg, #fef5f5 0%, #fdf8f8 100%);
+  border-bottom: 1px solid #f5e8e8;
+  flex-shrink: 0;
 }
 
-.wf-tile:hover {
-  z-index: 10;
-  border-color: #c7d2fe;
-  box-shadow: 0 8px 30px rgba(99, 102, 241, 0.18);
-  transform: translateY(-4px);
+.wf-type-badge {
+  font-size: 8px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  background: #9b59b6;
+  color: #fff;
+  flex-shrink: 0;
 }
 
-.wf-tile:active {
-  transform: translateY(-2px) scale(0.98);
+.wf-title {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  color: #8e44ad;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* 图标 */
-.wf-tile-icon {
-  width: 52px;
-  height: 52px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  border-radius: 14px;
+.wf-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.wf-action {
+  width: 16px;
+  height: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 26px;
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
-  transition: transform 0.25s ease;
+  font-size: 10px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.15s;
 }
 
-.wf-tile:hover .wf-tile-icon {
-  transform: scale(1.1);
+.wf-action.run {
+  color: #9b59b6;
 }
 
-/* 名称 */
-.wf-tile-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: #334155;
-  text-align: center;
+.wf-action.run:hover {
+  background: rgba(155, 89, 182, 0.1);
+}
+
+.wf-action.edit {
+  color: #3498db;
+}
+
+.wf-action.edit:hover {
+  background: rgba(52, 152, 219, 0.1);
+}
+
+.wf-action.del {
+  color: #bdc3c7;
+  font-size: 14px;
+  font-weight: 300;
+}
+
+.wf-action.del:hover {
+  color: #e74c3c;
+  background: rgba(231, 76, 60, 0.1);
+}
+
+/* 中间主体 */
+.wf-body {
+  flex: 1;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.wf-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #9b59b6, #8e44ad);
+  box-shadow: 0 2px 6px rgba(155, 89, 182, 0.3);
+}
+
+.wf-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.wf-desc {
+  font-size: 11px;
+  color: #555;
+  line-height: 1.3;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  width: 100%;
-  line-height: 1.3;
 }
 
-/* 元信息 */
-.wf-tile-meta {
-  font-size: 11px;
-  color: #94a3b8;
+.wf-steps {
+  font-size: 9px;
+  color: #aaa;
+}
+
+/* 底部栏 */
+.wf-footer {
+  padding: 6px 10px;
+  background: #fafafa;
+  border-top: 1px solid #f0f0f0;
+  flex-shrink: 0;
+}
+
+.wf-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wf-tag {
+  font-size: 9px;
+  padding: 2px 8px;
+  background: #f5e6f5;
+  color: #8e44ad;
+  border-radius: 4px;
+  white-space: nowrap;
   font-weight: 500;
 }
 
-/* 操作按钮 */
-.wf-tile-actions {
-  position: absolute;
-  top: 8px;
-  right: 8px;
+.wf-tag.input {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.wf-tag.output {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+/* 添加卡片 */
+.wf-card.wf-card-add {
+  background: #fafbfc;
+  border: 2px dashed #d0d5dd;
+  justify-content: center;
+  align-items: center;
+  min-height: 120px;
+}
+
+.wf-card.wf-card-add:hover {
+  border-color: #9b59b6;
+  background: #fef5f5;
+}
+
+.wf-add-content {
   display: flex;
-  gap: 4px;
-  opacity: 0;
-  transition: opacity 0.15s ease;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
 }
 
-.wf-tile:hover .wf-tile-actions {
-  opacity: 1;
-}
-
-.tile-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  border: none;
-  cursor: pointer;
+.wf-add-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #f5e6f5, #e8d4e8);
+  color: #9b59b6;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s ease;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(4px);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  font-size: 24px;
+  font-weight: 300;
 }
 
-.tile-btn svg {
-  width: 14px;
-  height: 14px;
-}
-
-.tile-btn.run {
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  color: #fff;
-}
-
-.tile-btn.run:hover {
-  transform: scale(1.1);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
-}
-
-.tile-btn.edit {
+.wf-add-text {
+  font-size: 12px;
   color: #64748b;
+  font-weight: 500;
 }
-
-.tile-btn.edit:hover {
-  background: #6366f1;
-  color: #fff;
-}
-
-.tile-btn.delete {
-  color: #94a3b8;
-}
-
-.tile-btn.delete:hover {
-  background: #ef4444;
-  color: #fff;
-}
-
-/* 添加方块 */
-.wf-tile.wf-tile-add {
-  background: #fafbfc;
-  border: 2px dashed #d0d5dd;
-}
-
-.wf-tile.wf-tile-add:hover {
-  border-color: #6366f1;
-  background: #f8faff;
-}
-
-.wf-tile.wf-tile-add .wf-tile-icon {
-  background: #f1f5f9;
-  box-shadow: none;
-}
-
-.wf-tile.wf-tile-add .wf-tile-icon.add-icon {
-  width: 48px;
-  height: 48px;
-  background: linear-gradient(135deg, #e0e7ff, #c7d2fe);
-  color: #6366f1;
-}
-
-.wf-tile.wf-tile-add .wf-tile-icon.add-icon svg {
-  width: 24px;
-  height: 24px;
-}
-
-.wf-tile.wf-tile-add:hover .wf-tile-icon.add-icon {
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  color: #fff;
-}
-
-.wf-tile.wf-tile-add .wf-tile-name {
-  color: #94a3b8;
-}
-
-.wf-tile.wf-tile-add:hover .wf-tile-name {
-  color: #6366f1;
-}
-
 
 /* Toast */
 .toast {

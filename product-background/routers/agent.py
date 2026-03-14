@@ -154,6 +154,88 @@ async def execute_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
     )
 
 
+@router.post("/execute-temp", response_model=ExecuteResponse)
+async def execute_temp_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
+    """
+    执行临时技能（用于测试）
+
+    skill_id 应该是临时技能的 temp_id
+    """
+    from pathlib import Path
+    import json as json_lib
+
+    temp_id = request.skill_id
+    print(f"\n{'='*60}")
+    print(f"[Execute Temp API] Incoming request for temp_id: {temp_id}")
+    print(f"{'='*60}")
+
+    # 临时技能目录
+    temp_skills_dir = Path(__file__).parent.parent / "skills_storage_temp"
+    temp_folder = temp_skills_dir / temp_id
+
+    if not temp_folder.exists():
+        return ExecuteResponse(
+            success=False,
+            error="临时技能不存在或已过期",
+            output=None
+        )
+
+    # 读取配置
+    config_path = temp_folder / "config.json"
+    if config_path.exists():
+        config = json_lib.loads(config_path.read_text(encoding="utf-8"))
+    else:
+        config = {"name": "temp_skill", "description": "临时测试技能"}
+
+    # 创建一个临时的 skill 对象用于执行
+    class TempSkill:
+        def __init__(self, folder, cfg):
+            self.id = temp_id
+            self.name = cfg.get("name", "temp_skill")
+            self.description = cfg.get("description", "")
+            self.folder_path = str(folder)
+            self.entry_script = cfg.get("entry_script")
+            self.output_config = cfg.get("output_config")
+
+    temp_skill = TempSkill(temp_folder, config)
+
+    # 执行技能
+    service = AgentService(db)
+    success, result, error, output = service.execute_temp_skill(
+        temp_folder=temp_folder,
+        skill_name=temp_skill.name,
+        script_name=request.script_name,
+        params=request.params
+    )
+
+    print(f"[Execute Temp API] Execution completed: success={success}")
+
+    # 生成输出文件
+    output_file = None
+    if success:
+        try:
+            file_info = generate_output_file(
+                skill_name=temp_skill.name,
+                skill_description=temp_skill.description,
+                execution_result=result,
+                execution_output=output,
+                params=request.params,
+                output_config=temp_skill.output_config
+            )
+            if file_info:
+                output_file = OutputFile(**file_info)
+        except Exception as e:
+            print(f"[Execute Temp API] ERROR generating output file: {e}")
+
+    return ExecuteResponse(
+        success=success,
+        result=result,
+        error=error,
+        output=output,
+        output_file=output_file
+    )
+
+
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """

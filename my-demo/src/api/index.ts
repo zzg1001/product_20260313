@@ -55,6 +55,7 @@ export interface OutputConfig {
 
 export interface Skill {
   id: string  // UUID
+  group_id: string  // 版本组ID
   name: string
   description: string | null
   icon: string | null
@@ -65,8 +66,17 @@ export interface Skill {
   output_config: OutputConfig | null  // 输出文件配置
   author: string | null
   version: string | null
+  status: 'active' | 'deprecated'  // 版本状态
+  original_created_at: string  // 原始创建时间（用于排序）
   created_at: string
   updated_at: string
+}
+
+export interface SkillVersion {
+  id: string
+  version: string | null
+  status: string
+  created_at: string
 }
 
 export interface SkillCreate {
@@ -247,6 +257,18 @@ export const skillsApi = {
   deleteTemp: (tempId: string) =>
     request<void>(`/skills/temp/${tempId}`, {
       method: 'DELETE',
+    }),
+
+  // ============ 版本管理 API ============
+
+  // Get all versions of a skill
+  getVersions: (id: string) =>
+    request<SkillVersion[]>(`/skills/${id}/versions`),
+
+  // Rollback to a specific version
+  rollback: (id: string, targetVersionId: string) =>
+    request<Skill>(`/skills/${id}/rollback/${targetVersionId}`, {
+      method: 'POST',
     }),
 }
 
