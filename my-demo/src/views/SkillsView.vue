@@ -361,7 +361,8 @@ const confirmRunWorkflow = async () => {
       icon: workflow.icon,
       nodes: workflow.nodes,
       edges: workflow.edges || [],
-      // 额外的上下文信息
+      // 标记从 SkillsView 传入，不需要再弹对话框
+      fromSkillsView: true,
       userContext: context,
       filePaths
     })

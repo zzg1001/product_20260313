@@ -116,8 +116,7 @@ const pendingExecution = ref<{ messageId: number; skills: SkillStep[] } | null>(
 const showContinueDialog = ref(false)
 const addedSkillName = ref('')
 
-// Workflow 执行上下文对话框
-const showWorkflowContextDialog = ref(false)
+// Workflow 执行
 const pendingWorkflow = ref<any>(null)
 const workflowContext = ref('')
 
@@ -181,7 +180,6 @@ const clearConversation = () => {
   showSaveDialog.value = false
   showDeleteConfirm.value = false
   showSkillExecution.value = false
-  showWorkflowContextDialog.value = false
 
   // 重置暂停状态
   isPaused.value = false
@@ -1546,12 +1544,12 @@ const executeSkills = async (messageId: number, skills: SkillStep[], startIndex:
           }
         }
 
-        // 获取上下文：优先用户查询，其次技能描述
-        const contextValue = lastUserQuery.value || step.description || ''
+        // 获取上下文：优先 userInput 里的 context，其次用户查询，最后技能描述
+        const contextValue = baseParams.context || lastUserQuery.value || step.description || ''
 
         const params = {
           ...baseParams,
-          // 添加用户原始查询作为上下文
+          // 添加上下文（userInput 的 context 优先）
           context: contextValue,
           skillDescription: step.description,
           ...(filePaths.length > 0 ? {
@@ -1755,8 +1753,8 @@ const executeSkillsParallel = async (messageId: number) => {
             }
           }
 
-          // 获取上下文：优先用户查询，其次技能描述
-          const contextValue = lastUserQuery.value || step.description || ''
+          // 获取上下文：优先 baseParams.context，其次用户查询，最后技能描述
+          const contextValue = baseParams.context || lastUserQuery.value || step.description || ''
           console.log(`[Skill Parallel] Context for "${step.skillName}":`, contextValue)
 
           const params = {
@@ -1778,26 +1776,31 @@ const executeSkillsParallel = async (messageId: number) => {
             params
           })
 
-          // 调试日志
-          console.log(`[Skill Parallel] Response for "${step.skillName}":`, response)
-          console.log(`[Skill Parallel] output_file:`, response.output_file)
+          // 调试日志 - 打印完整响应结构
+          console.log(`[Skill Parallel] Response for "${step.skillName}":`, JSON.stringify(response, null, 2))
+          console.log(`[Skill Parallel] Response keys:`, Object.keys(response))
+          console.log(`[Skill Parallel] output_file present:`, 'output_file' in response)
+          console.log(`[Skill Parallel] output_file value:`, response.output_file)
 
           if (response.success) {
             step.status = 'completed'
             step.output = response.output || `✓ ${step.description} 完成`
             if (response.output_file) {
-              console.log(`[Skill Execution] Using backend output_file:`, response.output_file)
-              step.outputFile = {
+              console.log(`[Skill Parallel] Using backend output_file:`, response.output_file)
+              const outputFile = {
                 type: response.output_file.type as OutputFile['type'],
                 name: response.output_file.name,
                 url: response.output_file.url,
                 size: response.output_file.size
               }
+              step.outputFile = outputFile
+              console.log(`[Skill Parallel] step.outputFile after assignment:`, step.outputFile)
             } else {
               // 后端没有返回文件时，基于输出内容创建本地文件
-              console.log(`[Skill Execution] No output_file, generating local md`)
+              console.log(`[Skill Parallel] No output_file in response, generating local md`)
               step.outputFile = generateOutputFile(step.skillName, step.description, step.output)
             }
+            console.log(`[Skill Parallel] Step ${step.id} final state: status=${step.status}, hasOutputFile=${!!step.outputFile}`)
           } else {
             step.status = 'error'
             // 构建完整的错误信息
@@ -2055,36 +2058,32 @@ const expandWorkflowNodes = (nodes: any[], edges: any[] = []): { steps: SkillSte
   return { steps, edges: resultEdges }
 }
 
-// 运行工作流 - 如果已有上下文则直接执行，否则弹出输入对话框
+// 运行工作流 - 从 SkillsView 传入直接执行
 const runWorkflow = (workflow: any) => {
-  // 如果从 SkillsView 传入了 userContext，直接使用
-  if (workflow.userContext !== undefined) {
-    pendingWorkflow.value = workflow
-    workflowContext.value = workflow.userContext || ''
-    // 直接执行，不弹对话框
-    confirmRunWorkflow()
-    return
-  }
-
-  // 否则弹出对话框让用户输入
   pendingWorkflow.value = workflow
-  workflowContext.value = workflow.description || ''
-  showWorkflowContextDialog.value = true
+  workflowContext.value = workflow.userContext || ''
+  confirmRunWorkflow()
 }
 
-// 确认执行工作流（用户输入上下文后）
+// 确认执行工作流
 const confirmRunWorkflow = () => {
   const workflow = pendingWorkflow.value
   if (!workflow) return
 
   const context = workflowContext.value.trim()
-  showWorkflowContextDialog.value = false
 
   // 获取传入的文件路径（如果有）
   const externalFilePaths: string[] = workflow.filePaths || []
 
   // 将工作流转换为技能执行计划（递归展开子流程）
   const { steps: skillPlan, edges: pipelineEdges } = expandWorkflowNodes(workflow.nodes, workflow.edges || [])
+
+  // 把用户上下文传递给每个 skill，避免执行时再次弹出交互面板
+  if (context) {
+    skillPlan.forEach(step => {
+      step.userInput = JSON.stringify({ context })
+    })
+  }
 
   // 检查是否有缺失的技能
   const missingSkills = skillPlan.filter(s => s.status === 'missing')
@@ -2165,13 +2164,6 @@ const confirmRunWorkflow = () => {
     }, 400)
   }, 600)
 
-  pendingWorkflow.value = null
-  workflowContext.value = ''
-}
-
-// 取消执行工作流
-const cancelRunWorkflow = () => {
-  showWorkflowContextDialog.value = false
   pendingWorkflow.value = null
   workflowContext.value = ''
 }
@@ -3124,37 +3116,6 @@ const openOutputFile = async (file: OutputFile) => {
           </div>
         </Transition>
 
-        <!-- Workflow 上下文输入对话框 -->
-        <Transition name="dialog">
-          <div v-if="showWorkflowContextDialog" class="continue-dialog-overlay" @click.self="cancelRunWorkflow">
-            <div class="continue-dialog workflow-context-dialog">
-              <div class="dialog-icon">🚀</div>
-              <h3 class="dialog-title">运行工作流：{{ pendingWorkflow?.name }}</h3>
-              <p class="dialog-desc">
-                请输入本次任务的具体需求或上下文，AI 将根据这些信息执行工作流中的每个技能。
-              </p>
-              <div class="context-input-wrapper">
-                <textarea
-                  v-model="workflowContext"
-                  class="context-textarea"
-                  placeholder="例如：帮我分析这份销售报告，重点关注华东地区的数据趋势..."
-                  rows="4"
-                  @keydown.ctrl.enter="confirmRunWorkflow"
-                ></textarea>
-                <span class="input-hint">Ctrl + Enter 快速执行</span>
-              </div>
-              <div class="dialog-actions">
-                <button class="dialog-btn cancel" @click="cancelRunWorkflow">取消</button>
-                <button class="dialog-btn confirm" @click="confirmRunWorkflow">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polygon points="5 3 19 12 5 21 5 3"/>
-                  </svg>
-                  开始执行
-                </button>
-              </div>
-            </div>
-          </div>
-        </Transition>
 
         <!-- 输入区域 -->
         <div class="chat-input">
