@@ -1193,10 +1193,43 @@ class FileGenerator:
 
     # ==================== 代码/网页生成器 ====================
 
+    def _strip_markdown_code_block(self, content: str) -> str:
+        """
+        剥离 markdown 代码块标记
+        例如: ```html\n<html>...</html>\n``` -> <html>...</html>
+        也处理没有闭合标记的情况（AI 输出被截断时）
+        """
+        if not content:
+            return content
+
+        stripped = content.strip()
+
+        # 检查是否以 ``` 开头
+        if stripped.startswith("```"):
+            # 找到第一个换行符（跳过语言标识如 ```html）
+            first_newline = stripped.find("\n")
+
+            if first_newline != -1:
+                # 尝试找到结尾的 ```
+                last_fence = stripped.rfind("\n```")
+
+                if last_fence > first_newline:
+                    # 正常情况：有闭合的代码块标记
+                    return stripped[first_newline + 1:last_fence].strip()
+                else:
+                    # AI 输出被截断，没有闭合标记，直接去掉开头的 ```xxx\n
+                    return stripped[first_newline + 1:].strip()
+
+        return content
+
     def _generate_html(self, title: str, content: str, extra_data: Dict = None) -> Tuple[str, str, str]:
         """生成 HTML 文件"""
         filename = generate_unique_filename("output", "html")
         filepath = self.output_dir / filename
+
+        # 先清理 markdown 代码块包裹
+        if content:
+            content = self._strip_markdown_code_block(content)
 
         # 检查是否已经是完整的 HTML
         if content and content.strip().lower().startswith(("<!doctype", "<html")):

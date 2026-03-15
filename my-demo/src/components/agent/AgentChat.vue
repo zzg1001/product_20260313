@@ -1068,6 +1068,49 @@ const computeGroupStatus = (skillPlan: SkillStep[]): PipelineGroup['status'] => 
   return 'pending'
 }
 
+// 判断流程是否正在运行（用于禁用点击）
+const isPipelineRunning = (messageId: number): boolean => {
+  const msg = messages.value.find(m => m.id === messageId)
+  if (!msg?.skillPlan) return false
+  return msg.skillPlan.some(s => s.status === 'running') || isProcessing.value
+}
+
+// 点击 skill 打开侧边栏配置（流程完成后可重新配置并执行）
+const openSkillForRerun = (messageId: number, stepId: number) => {
+  const msg = messages.value.find(m => m.id === messageId)
+  if (!msg?.skillPlan) return
+
+  // 如果流程正在运行，不允许点击
+  if (isPipelineRunning(messageId)) return
+
+  // 找到步骤索引
+  const startIndex = msg.skillPlan.findIndex(s => s.id === stepId)
+  if (startIndex === -1) return
+
+  const step = msg.skillPlan[startIndex]
+
+  // 重置该步骤及之后所有步骤的状态为 pending（这样配置完成后会从这里开始执行）
+  for (let i = startIndex; i < msg.skillPlan.length; i++) {
+    msg.skillPlan[i].status = 'pending'
+    msg.skillPlan[i].output = undefined
+    msg.skillPlan[i].outputFile = undefined
+  }
+
+  // 保存待执行状态
+  pendingExecution.value = {
+    messageId,
+    skills: msg.skillPlan
+  }
+
+  // 打开侧边栏配置
+  openSkillExecution(
+    { name: step.skillName, icon: step.skillIcon, description: step.description },
+    lastUserQuery.value,
+    messageId,
+    step.id
+  )
+}
+
 // 按拓扑层级分组（用于单个流程组的渲染）
 const getPipelineLevelsForGroup = (steps: SkillStep[], edges: PipelineEdge[]) => {
   if (steps.length === 0) return []
@@ -1504,26 +1547,6 @@ const executeSkills = async (messageId: number, skills: SkillStep[], startIndex:
       return // 暂停执行，等待用户添加技能
     }
 
-    // 检查技能是否需要用户交互 - 主动打开弹窗
-    if (needsInteraction(step.skillName) && !step.userInput) {
-      // 保存待执行状态
-      pendingExecution.value = {
-        messageId,
-        skills: skills
-      }
-      isProcessing.value = false
-
-      // 主动打开交互弹窗
-      openSkillExecution(
-        { name: step.skillName, icon: step.skillIcon, description: step.description },
-        lastUserQuery.value,
-        messageId,
-        step.id
-      )
-      scrollToBottom()
-      return // 暂停执行，等待用户配置
-    }
-
     // 设置当前步骤为 running
     step.status = 'running'
     scrollToBottom()
@@ -1708,24 +1731,6 @@ const executeSkillsParallel = async (messageId: number) => {
       msg.waitingForSkill = missingStep.skillName
       pendingExecution.value = { messageId, skills: steps }
       isProcessing.value = false
-      scrollToBottom()
-      return
-    }
-
-    // 检查是否有需要用户交互的技能
-    const interactiveStep = currentBatch.find(step =>
-      needsInteraction(step.skillName) && !step.userInput
-    )
-    if (interactiveStep) {
-      pendingExecution.value = { messageId, skills: steps }
-      isProcessing.value = false
-      // 主动打开交互弹窗
-      openSkillExecution(
-        { name: interactiveStep.skillName, icon: interactiveStep.skillIcon, description: interactiveStep.description },
-        lastUserQuery.value,
-        messageId,
-        interactiveStep.id
-      )
       scrollToBottom()
       return
     }
@@ -2892,15 +2897,11 @@ const openOutputFile = async (file: OutputFile) => {
                     <div
                       class="step-node"
                       :class="{
-                        'clickable': step.status === 'pending' && needsInteraction(step.skillName),
-                        'needs-input': step.status === 'pending' && needsInteraction(step.skillName)
+                        'clickable': !isPipelineRunning(message.id) && step.status !== 'running',
+                        'disabled': isPipelineRunning(message.id)
                       }"
-                      @click="step.status === 'pending' && needsInteraction(step.skillName) && openSkillExecution(
-                        { name: step.skillName, icon: step.skillIcon, description: step.description },
-                        message.content,
-                        message.id,
-                        step.id
-                      )"
+                      @click="!isPipelineRunning(message.id) && step.status !== 'running' && openSkillForRerun(message.id, step.id)"
+                      :title="isPipelineRunning(message.id) ? '流程运行中，请等待完成' : '点击配置并重新执行'"
                     >
                       <div class="step-number">{{ index + 1 }}</div>
                       <div class="step-icon">{{ step.skillIcon }}</div>
@@ -2912,19 +2913,8 @@ const openOutputFile = async (file: OutputFile) => {
                         </div>
                       </div>
                       <div class="step-status">
-                        <!-- 需要交互的技能 -->
-                        <span
-                          v-if="step.status === 'pending' && needsInteraction(step.skillName)"
-                          class="status-badge pending needs-input-badge"
-                        >
-                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <path d="M8 3v5l3 3"/>
-                            <circle cx="8" cy="8" r="6"/>
-                          </svg>
-                          需要配置
-                        </span>
-                        <!-- 普通等待 -->
-                        <span v-else-if="step.status === 'pending'" class="status-badge pending">
+                        <!-- 等待中 -->
+                        <span v-if="step.status === 'pending'" class="status-badge pending">
                           等待中
                         </span>
                         <span
@@ -4789,6 +4779,17 @@ const openOutputFile = async (file: OutputFile) => {
 
 .step-node.clickable {
   cursor: pointer;
+}
+
+.step-node.clickable:hover {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(139, 92, 246, 0.05) 100%);
+  border-color: #818cf8;
+  transform: translateY(-1px);
+}
+
+.step-node.disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .step-node.needs-input {
