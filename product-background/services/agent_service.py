@@ -515,7 +515,7 @@ If no suitable skills are found, return an empty plan with an explanation."""
             # 调用 Claude API
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=4000,
+                max_tokens=16000,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_input or f"请执行「{skill.name}」任务"}]
             )
