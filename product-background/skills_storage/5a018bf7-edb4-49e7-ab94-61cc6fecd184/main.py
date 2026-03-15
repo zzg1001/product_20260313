@@ -19,9 +19,19 @@ def convert_value(cell):
 
 
 def excel_to_json(input_path, sheet=None, output_path=None, compact=False):
-    """Convert Excel file to JSON."""
+    """Convert Excel file to JSON.
+
+    Args:
+        input_path: Excel 文件路径
+        sheet: 工作表名称或索引
+        output_path: 输出路径（如果提供则写入文件）
+        compact: 是否压缩 JSON
+
+    Returns:
+        转换后的数据列表
+    """
     wb = load_workbook(input_path, data_only=True)
-    
+
     # Select sheet
     if sheet is None:
         ws = wb.active
@@ -29,15 +39,15 @@ def excel_to_json(input_path, sheet=None, output_path=None, compact=False):
         ws = wb.worksheets[sheet]
     else:
         ws = wb[sheet]
-    
+
     # Get all rows
     rows = list(ws.iter_rows())
     if not rows:
         return []
-    
+
     # First row as headers
     headers = [cell.value for cell in rows[0]]
-    
+
     # Convert remaining rows to objects
     data = []
     for row in rows[1:]:
@@ -46,19 +56,16 @@ def excel_to_json(input_path, sheet=None, output_path=None, compact=False):
             if header is not None:
                 obj[header] = convert_value(cell)
         data.append(obj)
-    
-    # Determine output path
-    if output_path is None:
-        output_path = Path(input_path).stem + ".json"
-    
-    # Write JSON
-    with open(output_path, 'w', encoding='utf-8') as f:
-        if compact:
-            json.dump(data, f, ensure_ascii=False)
-        else:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    
-    print(f"✓ 转换完成: {output_path}")
+
+    # 只有明确指定 output_path 时才写入文件
+    if output_path is not None:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            if compact:
+                json.dump(data, f, ensure_ascii=False)
+            else:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        print(f"✓ 转换完成: {output_path}")
+
     print(f"  共 {len(data)} 条记录")
     return data
 

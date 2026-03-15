@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 
 interface SkillInteraction {
   id: string
@@ -114,6 +114,11 @@ const handleMouseEnter = (e: MouseEvent) => {
 const handleMouseLeave = () => {
   showTooltip.value = false
 }
+
+// 组件卸载时确保关闭tooltip
+onBeforeUnmount(() => {
+  showTooltip.value = false
+})
 </script>
 
 <template>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, onBeforeUnmount } from 'vue'
 
 interface WorkflowNode {
   id: string
@@ -207,6 +207,7 @@ const startDragNode = (e: MouseEvent, node: WorkflowNode) => {
   isDraggingNode.value = true
   draggedNode.value = node
   selectedNode.value = node.id
+  tooltip.value.show = false  // 拖拽时隐藏 tooltip
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
   dragOffset.value = { x: e.clientX - rect.left, y: e.clientY - rect.top }
 }
@@ -217,6 +218,7 @@ const startDragEdge = (e: MouseEvent, nodeId: string) => {
   e.preventDefault()
   isDraggingEdge.value = true
   edgeFromNode.value = nodeId
+  tooltip.value.show = false  // 拖拽时隐藏 tooltip
 
   const node = nodes.value.find(n => n.id === nodeId)
   if (node && canvasRef.value) {
@@ -431,6 +433,81 @@ const loadExample = () => {
 }
 
 const icons = ['🔄', '📊', '🗃️', '📋', '⚡', '🔗', '🤖', '📦', '🎯', '🚀']
+
+// Tooltip 状态
+const tooltip = ref<{
+  show: boolean
+  item: { name: string; icon: string; description: string; type: string } | null
+  style: { top: string; left: string }
+}>({
+  show: false,
+  item: null,
+  style: { top: '0px', left: '0px' }
+})
+
+const handleItemMouseMove = (e: MouseEvent, item: any) => {
+  const tooltipWidth = 200
+  const tooltipHeight = 80
+
+  let left = e.clientX + 12
+  let top = e.clientY + 12
+
+  if (left + tooltipWidth > window.innerWidth - 10) {
+    left = e.clientX - tooltipWidth - 8
+  }
+  if (top + tooltipHeight > window.innerHeight - 10) {
+    top = e.clientY - tooltipHeight - 8
+  }
+
+  tooltip.value = {
+    show: true,
+    item,
+    style: { top: `${top}px`, left: `${left}px` }
+  }
+}
+
+const handleItemMouseLeave = () => {
+  tooltip.value.show = false
+}
+
+// 工作区节点的 tooltip（位置固定在节点上方）
+const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
+  // 拖拽时不显示 tooltip
+  if (isDraggingNode.value || isDraggingEdge.value) return
+
+  const target = e.currentTarget as HTMLElement
+  const rect = target.getBoundingClientRect()
+  const tooltipWidth = 220
+  const tooltipHeight = 80
+
+  let left = rect.left + rect.width / 2 - tooltipWidth / 2
+  let top = rect.top - tooltipHeight - 8
+
+  // 边界检查
+  if (left < 10) left = 10
+  if (left + tooltipWidth > window.innerWidth - 10) {
+    left = window.innerWidth - tooltipWidth - 10
+  }
+  if (top < 10) {
+    top = rect.bottom + 8
+  }
+
+  tooltip.value = {
+    show: true,
+    item: {
+      name: node.name,
+      icon: node.icon,
+      description: node.description,
+      type: node.type
+    },
+    style: { top: `${top}px`, left: `${left}px` }
+  }
+}
+
+// 组件卸载时清理 tooltip
+onBeforeUnmount(() => {
+  tooltip.value.show = false
+})
 </script>
 
 <template>
@@ -566,6 +643,8 @@ const icons = ['🔄', '📊', '🗃️', '📋', '⚡', '🔗', '🤖', '📦',
               draggable="true"
               @dragstart="e => e.dataTransfer?.setData('application/json', JSON.stringify(item))"
               @click="quickAdd(item)"
+              @mousemove="handleItemMouseMove($event, item)"
+              @mouseleave="handleItemMouseLeave"
             >
               <span class="item-icon">{{ item.icon }}</span>
               <span class="item-name">{{ item.name }}</span>
@@ -584,6 +663,8 @@ const icons = ['🔄', '📊', '🗃️', '📋', '⚡', '🔗', '🤖', '📦',
               draggable="true"
               @dragstart="e => e.dataTransfer?.setData('application/json', JSON.stringify(item))"
               @click="quickAdd(item)"
+              @mousemove="handleItemMouseMove($event, item)"
+              @mouseleave="handleItemMouseLeave"
             >
               <span class="item-icon">{{ item.icon }}</span>
               <span class="item-name">{{ item.name }}</span>
@@ -683,6 +764,8 @@ const icons = ['🔄', '📊', '🗃️', '📋', '⚡', '🔗', '🤖', '📦',
           :style="{ left: node.position.x + 'px', top: node.position.y + 'px' }"
           @mousedown="startDragNode($event, node)"
           @click.stop="selectedNode = node.id"
+          @mouseenter="handleNodeMouseEnter($event, node)"
+          @mouseleave="handleItemMouseLeave"
         >
           <!-- 输入端口（左侧） -->
           <div
@@ -734,6 +817,20 @@ const icons = ['🔄', '📊', '🗃️', '📋', '⚡', '🔗', '🤖', '📦',
       </div>
       <div class="stats">{{ nodes.length }} 节点 · {{ edges.length }} 连接</div>
     </footer>
+
+    <!-- Skill/Workflow Tooltip -->
+    <Teleport to="body">
+      <Transition name="tooltip">
+        <div v-if="tooltip.show && tooltip.item" class="builder-tooltip" :style="tooltip.style">
+          <div class="builder-tooltip-header">
+            <span class="builder-tooltip-icon">{{ tooltip.item.icon }}</span>
+            <span class="builder-tooltip-name">{{ tooltip.item.name }}</span>
+            <span class="builder-tooltip-type">{{ tooltip.item.type === 'workflow' ? '子流程' : 'Skill' }}</span>
+          </div>
+          <p class="builder-tooltip-desc">{{ tooltip.item.description || '暂无描述' }}</p>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -1437,5 +1534,72 @@ const icons = ['🔄', '📊', '🗃️', '📋', '⚡', '🔗', '🤖', '📦',
 .dialog-enter-from .save-dialog,
 .dialog-leave-to .save-dialog {
   transform: scale(0.95) translateY(-10px);
+}
+</style>
+
+<style>
+/* Tooltip 样式 (Teleport 到 body，不能用 scoped) */
+.builder-tooltip {
+  position: fixed;
+  max-width: 220px;
+  padding: 10px 12px;
+  background: rgba(15, 23, 42, 0.95);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.4;
+  border-radius: 8px;
+  z-index: 99999;
+  pointer-events: none;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+}
+
+.builder-tooltip-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.builder-tooltip-icon {
+  font-size: 16px;
+}
+
+.builder-tooltip-name {
+  font-weight: 600;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.builder-tooltip-type {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: rgba(99, 102, 241, 0.3);
+  border-radius: 4px;
+  color: #a5b4fc;
+}
+
+.builder-tooltip-desc {
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 11px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Tooltip 动画 */
+.tooltip-enter-active,
+.tooltip-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.tooltip-enter-from,
+.tooltip-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
 }
 </style>

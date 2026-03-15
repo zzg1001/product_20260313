@@ -135,6 +135,11 @@ class ExecutionService:
             skill_name = node.get("name", "")
             skill = self.get_skill_by_name(skill_name)
 
+            print(f"\n{'='*50}")
+            print(f"[Workflow._execute] === Step {i}: {skill_name} ===")
+            print(f"[Workflow._execute] Context keys: {list(context.keys())}")
+            print(f"[Workflow._execute] Skill found: {skill is not None}")
+
             # 检查是否需要运行时交互
             interaction = self._check_interaction_needed(skill, i, context)
             if interaction:
@@ -161,6 +166,8 @@ class ExecutionService:
 
             # 执行 Skill
             try:
+                # 将步骤索引添加到 node 中，供 _execute_skill 使用
+                node["step_index"] = i
                 result = self._execute_skill(skill, node, context)
                 context[f"step_{i}"] = result
 
@@ -290,6 +297,41 @@ class ExecutionService:
                 "context": context.get("user_query", description),
                 "skillDescription": description
             }
+
+            # 【关键】将前一步的输出作为当前步骤的输入
+            # 查找最近的上一步输出（step_0, step_1, ...）
+            current_step = step_index
+            print(f"[Workflow._execute_skill] current_step={current_step}, context keys={list(context.keys())}")
+
+            for prev_step in range(current_step - 1, -1, -1):
+                prev_result = context.get(f"step_{prev_step}")
+                print(f"[Workflow._execute_skill] Checking step_{prev_step}: {type(prev_result)}, value={str(prev_result)[:200] if prev_result else None}")
+
+                if prev_result and isinstance(prev_result, dict):
+                    step_result = prev_result.get("result", {})
+                    print(f"[Workflow._execute_skill] step_result type={type(step_result)}, keys={list(step_result.keys()) if isinstance(step_result, dict) else 'N/A'}")
+
+                    if isinstance(step_result, dict):
+                        # 如果上一步有输出文件，传递给当前步骤
+                        output_file = step_result.get("_output_file")
+                        print(f"[Workflow._execute_skill] output_file={output_file}")
+
+                        if output_file and isinstance(output_file, dict):
+                            file_path = output_file.get("path")
+                            if file_path:
+                                params["file_path"] = file_path
+                                params["files"] = [file_path]
+                                params["previous_output"] = step_result
+                                print(f"[Workflow._execute_skill] ✓ Passing previous output file: {file_path}")
+                                break
+                        # 如果上一步有内容输出，也传递
+                        content = step_result.get("content")
+                        if content:
+                            params["previous_content"] = content
+                            params["input_data"] = content
+                            print(f"[Workflow._execute_skill] ✓ Passing previous content: {str(content)[:100]}...")
+                            break
+
             print(f"[Workflow._execute_skill] Calling execute_skill with params={params}")
 
             success, result, error, output = agent_service.execute_skill(

@@ -338,8 +338,23 @@ const runWorkflow = (workflow: Workflow) => {
 const confirmRunWorkflow = async () => {
   if (!pendingRunWorkflow.value) return
 
+  // 检查是否有文件还在上传中
+  const uploadingFiles = workflowRunFiles.value.filter(f => f.uploading)
+  if (uploadingFiles.length > 0) {
+    alert('请等待文件上传完成')
+    return
+  }
+
   const workflow = pendingRunWorkflow.value
   const context = workflowRunContext.value.trim()
+
+  // 获取文件路径（在关闭对话框前获取）
+  const filePaths = workflowRunFiles.value
+    .filter(f => f.serverPath)
+    .map(f => f.serverPath!)
+
+  console.log('[Workflow Run] Files:', workflowRunFiles.value)
+  console.log('[Workflow Run] File paths:', filePaths)
 
   // 关闭对话框
   showRunWorkflowDialog.value = false
@@ -349,10 +364,6 @@ const confirmRunWorkflow = async () => {
 
   // 等待 DOM 更新后调用 AgentChat 的 runWorkflow
   nextTick(() => {
-    // 传递上下文和文件信息
-    const filePaths = workflowRunFiles.value
-      .filter(f => f.serverPath)
-      .map(f => f.serverPath!)
 
     agentChatRef.value?.runWorkflow({
       id: workflow.id,
@@ -1047,6 +1058,8 @@ onMounted(() => {
 })
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
+  // 清理 tooltip 状态，避免页面切换后浮框残留
+  wfTooltip.value.show = false
 })
 </script>
 

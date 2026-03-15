@@ -1858,6 +1858,29 @@ const executeSkillsParallel = async (messageId: number) => {
           // 构建参数：包含用户输入、原始上下文和文件路径
           const filePaths = getContextFilePaths()
 
+          // 【关键】获取前驱节点的输出文件作为当前节点的输入
+          const predecessorFiles: string[] = []
+          if (step.nodeId) {
+            // 找到所有指向当前节点的边
+            edges.forEach(e => {
+              if (e.to === step.nodeId) {
+                // 找到前驱节点的 step
+                const predStep = nodeToStep.get(e.from)
+                if (predStep?.outputFile?.url) {
+                  // 从 URL 提取服务器路径
+                  const url = predStep.outputFile.url
+                  // URL 格式: /outputs/xxx.json 或 http://xxx/outputs/xxx.json
+                  const match = url.match(/\/outputs\/([^/]+)$/)
+                  if (match) {
+                    const serverPath = `outputs/${match[1]}`
+                    predecessorFiles.push(serverPath)
+                    console.log(`[Skill Parallel] Found predecessor output for "${step.skillName}": ${serverPath}`)
+                  }
+                }
+              }
+            })
+          }
+
           // 安全解析 userInput
           let baseParams: Record<string, any> = {}
           if (step.userInput) {
@@ -1872,15 +1895,20 @@ const executeSkillsParallel = async (messageId: number) => {
           const contextValue = baseParams.context || lastUserQuery.value || step.description || ''
           console.log(`[Skill Parallel] Context for "${step.skillName}":`, contextValue)
 
+          // 合并文件路径：前驱输出 + 用户上传
+          const allFilePaths = [...predecessorFiles, ...filePaths]
+          console.log(`[Skill Parallel] All file paths for "${step.skillName}":`, allFilePaths)
+
           const params = {
             ...baseParams,
             // 添加用户原始查询作为上下文
             context: contextValue,
             skillDescription: step.description,
-            // 如果有上传的文件，传递文件路径
-            ...(filePaths.length > 0 ? {
-              file_path: filePaths[0],  // 主文件
-              file_paths: filePaths     // 所有文件
+            // 传递文件路径（前驱输出 + 用户上传）
+            ...(allFilePaths.length > 0 ? {
+              file_path: allFilePaths[0],  // 主文件（优先前驱输出）
+              file_paths: allFilePaths,    // 所有文件
+              files: allFilePaths          // 兼容不同参数名
             } : {})
           }
 

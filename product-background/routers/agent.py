@@ -99,12 +99,43 @@ async def plan_skills(request: PlanRequest, db: Session = Depends(get_db)):
 @router.post("/execute", response_model=ExecuteResponse)
 async def execute_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
     """Execute a skill's script"""
+    from pathlib import Path
     from models.skill import Skill
+
     skill = db.query(Skill).filter(Skill.id == request.skill_id).first()
     skill_name = skill.name if skill else request.skill_id
 
+    # 【关键】处理文件路径：将相对路径转换为绝对路径
+    params = dict(request.params) if request.params else {}
+    base_dir = Path(__file__).parent.parent  # product-background 目录
+
+    # 处理 file_path
+    if params.get('file_path'):
+        fp = params['file_path']
+        if not Path(fp).is_absolute():
+            abs_path = base_dir / fp
+            if abs_path.exists():
+                params['file_path'] = str(abs_path)
+                print(f"[Execute] Converted file_path: {fp} -> {abs_path}")
+
+    # 处理 file_paths 和 files 数组
+    for key in ['file_paths', 'files']:
+        if params.get(key) and isinstance(params[key], list):
+            converted = []
+            for fp in params[key]:
+                if not Path(fp).is_absolute():
+                    abs_path = base_dir / fp
+                    if abs_path.exists():
+                        converted.append(str(abs_path))
+                        print(f"[Execute] Converted {key} item: {fp} -> {abs_path}")
+                    else:
+                        converted.append(fp)
+                else:
+                    converted.append(fp)
+            params[key] = converted
+
     # 日志：开始（包含输入参数）
-    log_skill_start(skill_name, request.params)
+    log_skill_start(skill_name, params)
 
     service = AgentService(db)
     log_skill_step(skill_name, "执行脚本", detail=f"script: {request.script_name}")
@@ -112,7 +143,7 @@ async def execute_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
     success, result, error, output = service.execute_skill(
         skill_id=request.skill_id,
         script_name=request.script_name,
-        params=request.params
+        params=params
     )
 
     # 生成输出文件
