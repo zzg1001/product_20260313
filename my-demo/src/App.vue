@@ -1,9 +1,14 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { RouterView } from 'vue-router'
+import LogPanel from '@/components/common/LogPanel.vue'
+
+const showLogPanel = ref(false)
 </script>
 
 <template>
   <RouterView />
+  <LogPanel v-model:show="showLogPanel" />
 </template>
 
 <style>

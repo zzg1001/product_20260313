@@ -10,6 +10,7 @@ from config import get_settings
 from models.skill import Skill
 from schemas.agent import SkillPlanItem
 from services.file_generator import OUTPUTS_DIR, generate_unique_filename
+from routers.logs import log_ai_start, log_ai_done, log_error
 
 settings = get_settings()
 
@@ -59,8 +60,8 @@ class AgentService:
                     try:
                         skill_md_content = skill_md_path.read_text(encoding="utf-8")
                         skills_info.append(f"\n--- Full content for {skill.name} ---\n{skill_md_content}\n---\n")
-                    except Exception as e:
-                        print(f"[AgentService] Error reading SKILL.md for {skill.name}: {e}")
+                    except Exception:
+                        pass
 
         return "Available skills:\n" + "\n".join(skills_info)
 
@@ -230,81 +231,52 @@ If no suitable skills are found, return an empty plan with an explanation."""
         """
         import traceback
 
-        print(f"\n{'='*60}")
-        print(f"[Skill Execute] Starting execution for skill_id: {skill_id}")
-        print(f"{'='*60}")
-
         skill = self.db.query(Skill).filter(Skill.id == skill_id).first()
         if not skill:
-            print(f"[Skill Execute] ERROR: Skill not found: {skill_id}")
+            log_error(f"技能不存在: {skill_id}")
             return False, None, "Skill not found", None
-
-        print(f"[Skill Execute] Skill found: {skill.name}")
-        print(f"[Skill Execute] Skill folder_path: {skill.folder_path}")
-        print(f"[Skill Execute] Skill entry_script: {skill.entry_script}")
 
         # 确定要执行的脚本
         if not skill.folder_path:
-            print(f"[Skill Execute] Skill has no folder, using AI fallback execution...")
-            # 没有文件夹的技能，使用 AI 来执行（基于技能名称和描述）
+            log_ai_start()
             return self._execute_skill_with_ai_fallback(skill, params)
 
         skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
-        print(f"[Skill Execute] Full skill folder path: {skill_folder}")
 
         if not skill_folder.exists():
-            print(f"[Skill Execute] ERROR: Skill folder not found: {skill_folder}")
+            log_error(f"文件夹不存在: {skill.folder_path}")
             return False, None, f"Skill folder not found: {skill.folder_path}", None
 
         # 确定脚本文件
         script_file = script_name or skill.entry_script or "main.py"
         script_path = skill_folder / script_file
-        print(f"[Skill Execute] Looking for script: {script_path}")
 
         if not script_path.exists():
-            print(f"[Skill Execute] Script not found at {script_path}, searching for .py files...")
-            # 尝试查找任意 .py 文件（排除 __init__.py 和 scripts 目录下的文件）
             py_files = [f for f in skill_folder.glob("*.py") if f.name != "__init__.py"]
-            print(f"[Skill Execute] Found .py files: {[f.name for f in py_files]}")
             if py_files:
                 script_path = py_files[0]
-                print(f"[Skill Execute] Using script: {script_path}")
             else:
-                # 没有可执行的 Python 脚本，检查是否有 SKILL.md（AI 型技能）
                 skill_md_path = skill_folder / "SKILL.md"
                 if skill_md_path.exists():
-                    print(f"[Skill Execute] Found SKILL.md, using AI execution")
-                    # 使用 AI 执行技能
+                    log_ai_start()
                     return self._execute_skill_with_ai(skill, skill_folder, params)
                 else:
-                    print(f"[Skill Execute] ERROR: No executable script found")
-                    # 列出文件夹内容帮助调试
-                    try:
-                        files = list(skill_folder.iterdir())
-                        print(f"[Skill Execute] Folder contents: {[f.name for f in files]}")
-                    except Exception:
-                        pass
+                    log_error(f"未找到脚本: {script_file}")
                     return False, None, f"Script not found: {script_file}", None
 
         # 读取脚本代码
         try:
             code = script_path.read_text(encoding="utf-8")
-            print(f"[Skill Execute] Script loaded, length: {len(code)} chars")
         except Exception as e:
-            print(f"[Skill Execute] ERROR: Failed to read script: {e}")
+            log_error(f"读取脚本失败: {e}")
             traceback.print_exc()
             return False, None, f"Failed to read script: {e}", None
 
-        # 检测代码类型：是否有 main(params) 函数
+        # 检测代码类型
         has_main_func = "def main(params)" in code or "def main(params:" in code
-
-        # 如果没有 main(params)，动态添加包装
         if not has_main_func:
-            print(f"[Skill Execute] No main(params) found, auto-wrapping code...")
             code = self._wrap_code_with_main(code, skill.name)
             has_main_func = True
-
-        print(f"[Skill Execute] Code analysis: has_main_func={has_main_func}")
 
         # Capture stdout
         old_stdout = sys.stdout
@@ -339,12 +311,8 @@ If no suitable skills are found, return an empty plan with an explanation."""
 
                 # 调用 main(params) 函数
                 if "main" in exec_globals and callable(exec_globals["main"]):
-                    print(f"[Skill Execute] Calling main(params)...")
                     result = exec_globals["main"](params or {})
                     exec_globals["result"] = result
-                    print(f"[Skill Execute] main() returned: {type(result)}")
-                else:
-                    print(f"[Skill Execute] ERROR: No main function found after wrapping!")
 
             finally:
                 # 恢复 Python 路径
@@ -359,8 +327,6 @@ If no suitable skills are found, return an empty plan with an explanation."""
             if isinstance(result, str) and result:
                 result_path = Path(result)
                 if result_path.exists() and result_path.is_file():
-                    print(f"[Skill Execute] Result is a file path: {result}")
-                    # 读取文件内容作为 output，并设置 _output_file 标记
                     try:
                         file_content = result_path.read_text(encoding='utf-8')
                         suffix = result_path.suffix.lower()
@@ -381,44 +347,25 @@ If no suitable skills are found, return an empty plan with an explanation."""
                             'content': file_content,
                             'message': f"文件已生成: {result_path.name}"
                         }
-                        output = file_content  # 使用文件内容作为输出
-                    except Exception as e:
-                        print(f"[Skill Execute] Failed to read result file: {e}")
+                        output = file_content
+                    except Exception:
+                        pass
 
-            # 恢复标准输出后打印日志
+            # 恢复标准输出
             sys.stdout = old_stdout
             sys.stderr = old_stderr
-            print(f"[Skill Execute] SUCCESS: Skill '{skill.name}' executed successfully")
-            if output:
-                print(f"[Skill Execute] Output:\n{output[:500]}{'...' if len(output) > 500 else ''}")
-            if stderr_output:
-                print(f"[Skill Execute] Stderr:\n{stderr_output[:500]}")
-            print(f"[Skill Execute] Result type: {type(result)}, value: {str(result)[:200] if result else None}")
 
             return True, result, None, output
         except Exception as e:
             output = sys.stdout.getvalue()
             stderr_output = sys.stderr.getvalue()
 
-            # 恢复标准输出后打印错误日志
+            # 恢复标准输出
             sys.stdout = old_stdout
             sys.stderr = old_stderr
 
-            # 打印详细错误信息
-            print(f"\n{'!'*60}")
-            print(f"[Skill Execute] FAILED: Skill '{skill.name}' execution failed!")
-            print(f"{'!'*60}")
-            print(f"[Skill Execute] Error Type: {type(e).__name__}")
-            print(f"[Skill Execute] Error Message: {str(e)}")
-            print(f"[Skill Execute] Script Path: {script_path}")
-            print(f"[Skill Execute] Params: {params}")
-            print(f"\n[Skill Execute] Full Traceback:")
+            # 记录详细错误
             traceback.print_exc()
-            if output:
-                print(f"\n[Skill Execute] Captured stdout:\n{output}")
-            if stderr_output:
-                print(f"\n[Skill Execute] Captured stderr:\n{stderr_output}")
-            print(f"{'!'*60}\n")
 
             error_msg = f"{type(e).__name__}: {str(e)}"
             return False, None, error_msg, output
@@ -475,8 +422,6 @@ If no suitable skills are found, return an empty plan with an explanation."""
             file_content = ""
             if file_paths:
                 file_content = self._read_files_for_ai(file_paths)
-                if file_content:
-                    print(f"[AI Skill] Read file content, length: {len(file_content)}")
 
             # 检测期望的输出格式
             combined_text = f"{skill.name} {skill.description or ''} {user_input} {skill_md_content[:500]}".lower()
@@ -517,10 +462,6 @@ If no suitable skills are found, return an empty plan with an explanation."""
                 user_message = f"{user_message}\n\n## 用户上传的文件数据\n{file_content}"
 
             # 调用 Claude API
-            print(f"[AI Skill] Executing skill '{skill.name}' with AI...")
-            print(f"[AI Skill] User input: {user_input[:200]}...")
-            print(f"[AI Skill] File paths: {file_paths}")
-
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=16000,
@@ -529,7 +470,7 @@ If no suitable skills are found, return an empty plan with an explanation."""
             )
 
             ai_output = response.content[0].text
-            print(f"[AI Skill] AI response length: {len(ai_output)}")
+            log_ai_done()
 
             # 根据技能类型生成适当的输出文件
             result = {
@@ -548,14 +489,8 @@ If no suitable skills are found, return an empty plan with an explanation."""
 
         except Exception as e:
             import traceback
-            print(f"\n{'!'*60}")
-            print(f"[AI Skill] FAILED: AI skill '{skill.name}' execution failed!")
-            print(f"{'!'*60}")
-            print(f"[AI Skill] Error Type: {type(e).__name__}")
-            print(f"[AI Skill] Error Message: {str(e)}")
-            print(f"\n[AI Skill] Full Traceback:")
             traceback.print_exc()
-            print(f"{'!'*60}\n")
+            log_error(f"AI执行失败: {str(e)[:30]}")
             return False, None, f"AI skill execution failed: {str(e)}", None
 
     def _execute_skill_with_ai_fallback(
@@ -580,17 +515,12 @@ If no suitable skills are found, return an empty plan with an explanation."""
             if file_path and file_path not in file_paths:
                 file_paths.append(file_path)
 
-            print(f"[AI Fallback] Executing skill '{skill.name}' with AI")
-            print(f"[AI Fallback] Skill description: {skill.description}")
-            print(f"[AI Fallback] User input: {user_input[:200]}...")
-            print(f"[AI Fallback] File paths: {file_paths}")
+            log_ai_start()
 
             # 读取上传文件的内容
             file_content = ""
             if file_paths:
                 file_content = self._read_files_for_ai(file_paths)
-                if file_content:
-                    print(f"[AI Fallback] Read file content, length: {len(file_content)}")
 
             # 检测期望的输出格式
             combined_text = f"{skill.name} {skill.description or ''} {user_input}".lower()
@@ -638,7 +568,7 @@ If no suitable skills are found, return an empty plan with an explanation."""
             )
 
             ai_output = response.content[0].text
-            print(f"[AI Fallback] AI response length: {len(ai_output)}")
+            log_ai_done()
 
             # 构建结果
             result = {
@@ -656,12 +586,8 @@ If no suitable skills are found, return an empty plan with an explanation."""
 
         except Exception as e:
             import traceback
-            print(f"\n{'!'*60}")
-            print(f"[AI Fallback] FAILED: AI fallback for '{skill.name}' failed!")
-            print(f"{'!'*60}")
-            print(f"[AI Fallback] Error: {type(e).__name__}: {str(e)}")
             traceback.print_exc()
-            print(f"{'!'*60}\n")
+            log_error(f"AI执行失败: {str(e)[:30]}")
             return False, None, f"AI fallback execution failed: {str(e)}", None
 
     def _wrap_code_with_main(self, code: str, skill_name: str) -> str:
@@ -673,7 +599,6 @@ If no suitable skills are found, return an empty plan with an explanation."""
         # 查找所有定义的函数
         func_pattern = r'def\s+(\w+)\s*\([^)]*\)'
         all_funcs = re.findall(func_pattern, code)
-        print(f"[CodeWrap] Found functions: {all_funcs}")
 
         # 排除辅助函数
         exclude_funcs = {'convert_value', 'helper', 'utils', '__init__', 'setup', 'init'}
@@ -705,13 +630,10 @@ If no suitable skills are found, return an empty plan with an explanation."""
             candidates.append((score, func_name))
 
         if not candidates:
-            print(f"[CodeWrap] No suitable function found")
             return code
 
         candidates.sort(reverse=True)
-        print(f"[CodeWrap] Candidates: {candidates}")
         main_func_name = candidates[0][1]
-        print(f"[CodeWrap] Selected: {main_func_name}")
 
         # 生成包装代码 - 使用 _output_file 以匹配系统的检测逻辑
         wrapper = f'''
@@ -780,7 +702,6 @@ def main(params):
             try:
                 path = Path(file_path)
                 if not path.exists():
-                    print(f"[AI Fallback] File not found: {file_path}")
                     continue
 
                 suffix = path.suffix.lower()
@@ -795,9 +716,8 @@ def main(params):
                             contents.append(f"### {path.name} (前500行)\n```\n{df.to_string()}\n```")
                         else:
                             contents.append(f"### {path.name}\n```\n{df.to_string()}\n```")
-                        print(f"[AI Fallback] Read Excel: {path.name}, rows: {len(df)}")
-                    except Exception as e:
-                        print(f"[AI Fallback] Failed to read Excel {path.name}: {e}")
+                    except Exception:
+                        pass
 
                 # CSV 文件
                 elif suffix == '.csv':
@@ -808,9 +728,8 @@ def main(params):
                             contents.append(f"### {path.name} (前500行)\n```\n{df.to_string()}\n```")
                         else:
                             contents.append(f"### {path.name}\n```\n{df.to_string()}\n```")
-                        print(f"[AI Fallback] Read CSV: {path.name}, rows: {len(df)}")
-                    except Exception as e:
-                        print(f"[AI Fallback] Failed to read CSV {path.name}: {e}")
+                    except Exception:
+                        pass
 
                 # JSON 文件
                 elif suffix == '.json':
@@ -822,9 +741,8 @@ def main(params):
                         if len(json_str) > 10000:
                             json_str = json_str[:10000] + "\n...[truncated]..."
                         contents.append(f"### {path.name}\n```json\n{json_str}\n```")
-                        print(f"[AI Fallback] Read JSON: {path.name}")
-                    except Exception as e:
-                        print(f"[AI Fallback] Failed to read JSON {path.name}: {e}")
+                    except Exception:
+                        pass
 
                 # 文本文件
                 elif suffix in ['.txt', '.md', '.py', '.js', '.html', '.css']:
@@ -833,16 +751,14 @@ def main(params):
                         if len(text) > 10000:
                             text = text[:10000] + "\n...[truncated]..."
                         contents.append(f"### {path.name}\n```\n{text}\n```")
-                        print(f"[AI Fallback] Read text: {path.name}")
-                    except Exception as e:
-                        print(f"[AI Fallback] Failed to read text {path.name}: {e}")
+                    except Exception:
+                        pass
 
                 else:
-                    print(f"[AI Fallback] Unsupported file type: {suffix}")
                     contents.append(f"### {path.name}\n[不支持的文件类型: {suffix}]")
 
-            except Exception as e:
-                print(f"[AI Fallback] Error processing file {file_path}: {e}")
+            except Exception:
+                pass
 
         return "\n\n".join(contents)
 
@@ -866,12 +782,6 @@ def main(params):
             (success, result, error, output)
         """
         import traceback
-
-        print(f"\n{'='*60}")
-        print(f"[Temp Skill Execute] Starting temp skill execution")
-        print(f"[Temp Skill Execute] Folder: {temp_folder}")
-        print(f"[Temp Skill Execute] Name: {skill_name}")
-        print(f"{'='*60}")
 
         if not temp_folder.exists():
             return False, None, "临时技能文件夹不存在", None
@@ -919,13 +829,11 @@ def main(params):
 
             # 检测代码类型
             has_main_func = "def main(params)" in code or "def main(params:" in code
-            print(f"[Temp Skill Execute] has_main_func={has_main_func}")
 
             exec(code, exec_globals)
 
-            # 如果有 main(params) 函数，调用它（与正式技能执行一致）
+            # 如果有 main(params) 函数，调用它
             if has_main_func and "main" in exec_globals and callable(exec_globals["main"]):
-                print(f"[Temp Skill Execute] Calling main(params)...")
                 result = exec_globals["main"](params or {})
                 exec_globals["result"] = result
             else:
@@ -972,8 +880,6 @@ def main(params):
             file_content = ""
             if file_paths:
                 file_content = self._read_files_for_ai(file_paths)
-                if file_content:
-                    print(f"[AI Temp Skill] Read file content, length: {len(file_content)}")
 
             # 检测期望的输出格式
             combined_text = f"{skill_name} {skill_md_content[:500]} {user_input}".lower()

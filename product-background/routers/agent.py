@@ -13,6 +13,11 @@ from schemas.agent import (
 )
 from services.agent_service import AgentService
 from services.file_generator import generate_output_file
+from routers.logs import (
+    log_info, log_error,
+    log_skill_start, log_skill_step, log_skill_success, log_skill_error,
+    log_ai_start, log_ai_done, log_file_write
+)
 
 router = APIRouter(prefix="/api/agent", tags=["Agent"])
 
@@ -24,22 +29,31 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     """Chat with AI agent (non-streaming)"""
+    msg_preview = request.message[:50] + "..." if len(request.message) > 50 else request.message
+    log_info("💬 收到消息", detail=msg_preview)
     service = AgentService(db)
     try:
         history = [{"role": m.role, "content": m.content} for m in request.history] if request.history else []
+        log_ai_start(request.message[:100])
         response = await service.chat(
             message=request.message,
             history=history,
             skill_ids=request.skill_ids
         )
+        log_ai_done(response[:100] if response else None)
         return ChatResponse(message=response)
     except Exception as e:
+        log_error(f"聊天失败: {str(e)[:50]}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/chat/stream")
 async def chat_stream(request: ChatRequest, db: Session = Depends(get_db)):
     """Chat with AI agent (streaming via SSE)"""
+    msg_preview = request.message[:50] + "..." if len(request.message) > 50 else request.message
+    log_info("💬 收到消息", detail=msg_preview)
+    log_ai_start(request.message[:100])
+
     service = AgentService(db)
 
     async def generate():
@@ -51,8 +65,10 @@ async def chat_stream(request: ChatRequest, db: Session = Depends(get_db)):
                 skill_ids=request.skill_ids
             ):
                 yield f"data: {json.dumps({'content': chunk})}\n\n"
+            log_ai_done()
             yield "data: [DONE]\n\n"
         except Exception as e:
+            log_error(f"流式响应失败: {str(e)[:50]}")
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(
@@ -83,67 +99,48 @@ async def plan_skills(request: PlanRequest, db: Session = Depends(get_db)):
 @router.post("/execute", response_model=ExecuteResponse)
 async def execute_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
     """Execute a skill's script"""
-    print(f"\n{'='*60}")
-    print(f"[Execute API] Incoming request for skill_id: {request.skill_id}")
-    print(f"{'='*60}")
-    print(f"[Execute API] Script name: {request.script_name}")
-    print(f"[Execute API] Params keys: {list(request.params.keys()) if request.params else 'None'}")
-    if request.params:
-        context = request.params.get('context', '')
-        print(f"[Execute API] Context: {context[:200] if context else 'NO CONTEXT'}...")
+    from models.skill import Skill
+    skill = db.query(Skill).filter(Skill.id == request.skill_id).first()
+    skill_name = skill.name if skill else request.skill_id
+
+    # 日志：开始（包含输入参数）
+    log_skill_start(skill_name, request.params)
 
     service = AgentService(db)
+    log_skill_step(skill_name, "执行脚本", detail=f"script: {request.script_name}")
+
     success, result, error, output = service.execute_skill(
         skill_id=request.skill_id,
         script_name=request.script_name,
         params=request.params
     )
 
-    print(f"\n[Execute API] Execution completed:")
-    print(f"[Execute API]   - Success: {success}")
-    print(f"[Execute API]   - Error: {error}")
-    print(f"[Execute API]   - Result type: {type(result)}")
-    if result:
-        result_str = str(result)
-        print(f"[Execute API]   - Result preview: {result_str[:300]}{'...' if len(result_str) > 300 else ''}")
-
     # 生成输出文件
     output_file = None
     if success:
-        # 获取技能信息用于生成文件
-        from models.skill import Skill
-        skill = db.query(Skill).filter(Skill.id == request.skill_id).first()
-        print(f"[Execute API] Generating output file for skill: {skill.name if skill else 'None'}")
+        log_skill_step(skill_name, "生成文件")
+
         if skill:
             try:
-                # 获取技能的 output_config
                 skill_output_config = skill.output_config if hasattr(skill, 'output_config') else None
-                print(f"[Execute API] Skill output_config: {skill_output_config}")
-
                 file_info = generate_output_file(
                     skill_name=skill.name,
                     skill_description=skill.description,
                     execution_result=result,
                     execution_output=output,
                     params=request.params,
-                    output_config=skill_output_config  # 传递技能的输出配置
+                    output_config=skill_output_config
                 )
-                print(f"[Execute API] Generated file_info: {file_info}")
                 if file_info:
                     output_file = OutputFile(**file_info)
-            except Exception as e:
-                import traceback
-                print(f"[Execute API] ERROR generating output file: {e}")
-                traceback.print_exc()
-    else:
-        # 执行失败时也打印详细信息
-        print(f"\n[Execute API] ❌ Skill execution FAILED!")
-        print(f"[Execute API] Error: {error}")
-        if output:
-            print(f"[Execute API] Output captured:\n{output}")
+                    log_file_write(file_info['name'], file_info.get('size'))
+            except Exception:
+                pass
 
-    print(f"[Execute API] Final output_file: {output_file}")
-    print(f"{'='*60}\n")
+        # 日志：完成（包含结果）
+        log_skill_success(skill_name, result)
+    else:
+        log_skill_error(skill_name, error or "未知错误")
 
     return ExecuteResponse(
         success=success,
@@ -156,38 +153,22 @@ async def execute_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
 
 @router.post("/execute-temp", response_model=ExecuteResponse)
 async def execute_temp_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
-    """
-    执行临时技能（用于测试）
-
-    skill_id 应该是临时技能的 temp_id
-    """
+    """执行临时技能（用于测试）"""
     from pathlib import Path
     import json as json_lib
 
     temp_id = request.skill_id
-    print(f"\n{'='*60}")
-    print(f"[Execute Temp API] Incoming request for temp_id: {temp_id}")
-    print(f"{'='*60}")
-
-    # 临时技能目录
     temp_skills_dir = Path(__file__).parent.parent / "skills_storage_temp"
     temp_folder = temp_skills_dir / temp_id
 
     if not temp_folder.exists():
-        return ExecuteResponse(
-            success=False,
-            error="临时技能不存在或已过期",
-            output=None
-        )
+        log_error("临时技能不存在", detail=f"ID: {temp_id}")
+        return ExecuteResponse(success=False, error="临时技能不存在或已过期", output=None)
 
     # 读取配置
     config_path = temp_folder / "config.json"
-    if config_path.exists():
-        config = json_lib.loads(config_path.read_text(encoding="utf-8"))
-    else:
-        config = {"name": "temp_skill", "description": "临时测试技能"}
+    config = json_lib.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {"name": "temp_skill"}
 
-    # 创建一个临时的 skill 对象用于执行
     class TempSkill:
         def __init__(self, folder, cfg):
             self.id = temp_id
@@ -199,8 +180,12 @@ async def execute_temp_skill(request: ExecuteRequest, db: Session = Depends(get_
 
     temp_skill = TempSkill(temp_folder, config)
 
-    # 执行技能
+    # 日志：开始（包含输入参数）
+    log_skill_start(f"[测试] {temp_skill.name}", request.params)
+
     service = AgentService(db)
+    log_skill_step(temp_skill.name, "执行测试", detail=f"script: {request.script_name}")
+
     success, result, error, output = service.execute_temp_skill(
         temp_folder=temp_folder,
         skill_name=temp_skill.name,
@@ -208,11 +193,10 @@ async def execute_temp_skill(request: ExecuteRequest, db: Session = Depends(get_
         params=request.params
     )
 
-    print(f"[Execute Temp API] Execution completed: success={success}")
-
     # 生成输出文件
     output_file = None
     if success:
+        log_skill_step(temp_skill.name, "生成文件")
         try:
             file_info = generate_output_file(
                 skill_name=temp_skill.name,
@@ -224,8 +208,13 @@ async def execute_temp_skill(request: ExecuteRequest, db: Session = Depends(get_
             )
             if file_info:
                 output_file = OutputFile(**file_info)
-        except Exception as e:
-            print(f"[Execute Temp API] ERROR generating output file: {e}")
+                log_file_write(file_info['name'], file_info.get('size'))
+        except Exception:
+            pass
+
+        log_skill_success(temp_skill.name, result)
+    else:
+        log_skill_error(temp_skill.name, error or "未知错误")
 
     return ExecuteResponse(
         success=success,

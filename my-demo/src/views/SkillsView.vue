@@ -1052,21 +1052,6 @@ onUnmounted(() => {
 
 <template>
   <div class="page">
-    <!-- 顶部Header -->
-    <header class="header">
-      <h1>AI Skills Platform</h1>
-      <div class="header-actions">
-        <span class="stat">{{ skills.length }} Skills</span>
-        <button class="header-add-btn" @click="openCreateModal">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="5" x2="12" y2="19"/>
-            <line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-          <span>New Skill</span>
-        </button>
-      </div>
-    </header>
-
     <!-- 主体 -->
     <div class="body">
       <!-- 左侧导航 -->
@@ -1138,7 +1123,7 @@ onUnmounted(() => {
           <!-- 满容量提示 -->
           <div v-if="isFull" class="full-notice">
             <span class="full-notice-icon">🎉</span>
-            <span class="full-notice-text">All slots filled! Click <strong>New Skill</strong> in header to add more.</span>
+            <span class="full-notice-text">All slots filled!</span>
           </div>
           <!-- 卡片网格 -->
           <div class="grid">
@@ -1697,61 +1682,6 @@ onUnmounted(() => {
   flex-direction: column;
   overflow: hidden;
   background: #f4f6f8;
-}
-
-/* Header */
-.header {
-  height: 48px;
-  background: #fff;
-  border-bottom: 1px solid #e5e7eb;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
-  flex-shrink: 0;
-}
-
-.header h1 {
-  font-size: 15px;
-  font-weight: 700;
-  color: #111827;
-  margin: 0;
-}
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.stat {
-  font-size: 12px;
-  color: #6b7280;
-}
-
-.header-add-btn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 6px 12px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border: none;
-  border-radius: 6px;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.header-add-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-}
-
-.header-add-btn svg {
-  width: 14px;
-  height: 14px;
 }
 
 /* Body */
