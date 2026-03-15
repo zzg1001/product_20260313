@@ -440,7 +440,7 @@ If no suitable skills are found, return an empty plan with an explanation."""
 
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=4000,
+                max_tokens=16000,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_input or "请根据技能说明执行默认任务"}]
             )
