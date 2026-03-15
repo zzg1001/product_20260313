@@ -4,7 +4,10 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from pathlib import Path
 from database import init_db
+# 导入 models 确保表被创建
+import models  # noqa: F401
 from routers import skills_router, workflows_router, agent_router, executions_router
+from routers.favorites import router as favorites_router
 from routers.logs import router as logs_router, setup_log_handler, sys_ready
 
 # 确保 outputs 和 uploads 目录存在
@@ -45,6 +48,7 @@ app.include_router(skills_router)
 app.include_router(workflows_router)
 app.include_router(agent_router)
 app.include_router(executions_router)
+app.include_router(favorites_router)
 app.include_router(logs_router)
 
 # 静态文件服务 - 输出文件下载

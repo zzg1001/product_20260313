@@ -119,8 +119,11 @@ export interface SkillUploadData {
 }
 
 export const skillsApi = {
-  // Get all skills
-  getAll: () => request<Skill[]>('/skills'),
+  // Get all skills (with optional search)
+  getAll: (search?: string) => {
+    const params = search ? `?q=${encodeURIComponent(search)}` : ''
+    return request<Skill[]>(`/skills${params}`)
+  },
 
   // Get single skill
   getById: (id: string) => request<Skill>(`/skills/${id}`),
@@ -508,8 +511,11 @@ export interface WorkflowUpdate {
 }
 
 export const workflowsApi = {
-  // Get all workflows
-  getAll: () => request<Workflow[]>('/workflows'),
+  // Get all workflows (with optional search)
+  getAll: (search?: string) => {
+    const params = search ? `?q=${encodeURIComponent(search)}` : ''
+    return request<Workflow[]>(`/workflows${params}`)
+  },
 
   // Get single workflow
   getById: (id: string) => request<Workflow>(`/workflows/${id}`),
@@ -532,6 +538,56 @@ export const workflowsApi = {
   delete: (id: string) =>
     request<void>(`/workflows/${id}`, {
       method: 'DELETE',
+    }),
+}
+
+// ============ Favorites API ============
+
+export interface FavoriteListResponse {
+  skills: string[]  // 收藏的技能ID列表
+  workflows: string[]  // 收藏的子流程ID列表
+}
+
+// 获取或生成用户ID（匿名用户使用本地存储的ID）
+const getUserId = (): string => {
+  const key = 'user-anonymous-id'
+  let userId = localStorage.getItem(key)
+  if (!userId) {
+    userId = `anon-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    localStorage.setItem(key, userId)
+  }
+  return userId
+}
+
+export const favoritesApi = {
+  // 获取收藏列表
+  getAll: () =>
+    request<FavoriteListResponse>('/favorites', {
+      headers: { 'X-User-ID': getUserId() }
+    }),
+
+  // 切换收藏状态
+  toggle: (itemType: 'skill' | 'workflow', itemId: string) =>
+    request<{ favorited: boolean; item_id: string }>('/favorites/toggle', {
+      method: 'POST',
+      headers: { 'X-User-ID': getUserId() },
+      body: JSON.stringify({ item_type: itemType, item_id: itemId })
+    }),
+
+  // 添加收藏
+  add: (itemType: 'skill' | 'workflow', itemId: string) =>
+    request<any>('/favorites', {
+      method: 'POST',
+      headers: { 'X-User-ID': getUserId() },
+      body: JSON.stringify({ item_type: itemType, item_id: itemId })
+    }),
+
+  // 取消收藏
+  remove: (itemType: 'skill' | 'workflow', itemId: string) =>
+    request<any>('/favorites', {
+      method: 'DELETE',
+      headers: { 'X-User-ID': getUserId() },
+      body: JSON.stringify({ item_type: itemType, item_id: itemId })
     }),
 }
 
@@ -642,4 +698,5 @@ export default {
   agent: agentApi,
   workflows: workflowsApi,
   executions: executionsApi,
+  favorites: favoritesApi,
 }

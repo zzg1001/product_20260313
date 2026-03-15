@@ -9,8 +9,18 @@ class WorkflowService:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_all(self) -> List[Workflow]:
-        return self.db.query(Workflow).all()
+    def get_all(self, search: Optional[str] = None) -> List[Workflow]:
+        query = self.db.query(Workflow)
+
+        # 搜索过滤
+        if search and search.strip():
+            search_term = f"%{search.strip()}%"
+            query = query.filter(
+                (Workflow.name.ilike(search_term)) |
+                (Workflow.description.ilike(search_term))
+            )
+
+        return query.all()
 
     def get_by_id(self, workflow_id: str) -> Optional[Workflow]:
         return self.db.query(Workflow).filter(Workflow.id == workflow_id).first()

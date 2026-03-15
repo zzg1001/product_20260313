@@ -26,11 +26,26 @@ TEMP_SKILLS_STORAGE_DIR.mkdir(exist_ok=True)
 
 
 @router.get("", response_model=List[SkillResponse])
-async def get_skills(db: Session = Depends(get_db)):
-    """获取所有当前版本的技能（status=active）"""
-    skills = db.query(Skill).filter(
-        Skill.status == "active"
-    ).order_by(Skill.original_created_at.asc()).all()
+async def get_skills(
+    q: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """获取所有当前版本的技能（status=active）
+
+    Args:
+        q: 搜索关键词（搜索名称和描述）
+    """
+    query = db.query(Skill).filter(Skill.status == "active")
+
+    # 搜索过滤
+    if q and q.strip():
+        search_term = f"%{q.strip()}%"
+        query = query.filter(
+            (Skill.name.ilike(search_term)) |
+            (Skill.description.ilike(search_term))
+        )
+
+    skills = query.order_by(Skill.original_created_at.asc()).all()
     return skills
 
 

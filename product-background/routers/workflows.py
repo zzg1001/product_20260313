@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from database import get_db
 from schemas.workflow import WorkflowCreate, WorkflowUpdate, WorkflowResponse
 from services.workflow_service import WorkflowService
@@ -9,10 +9,17 @@ router = APIRouter(prefix="/api/workflows", tags=["Workflows"])
 
 
 @router.get("", response_model=List[WorkflowResponse])
-async def get_workflows(db: Session = Depends(get_db)):
-    """Get all workflows"""
+async def get_workflows(
+    q: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Get all workflows
+
+    Args:
+        q: 搜索关键词（搜索名称和描述）
+    """
     service = WorkflowService(db)
-    return service.get_all()
+    return service.get_all(search=q)
 
 
 @router.get("/{workflow_id}", response_model=WorkflowResponse)

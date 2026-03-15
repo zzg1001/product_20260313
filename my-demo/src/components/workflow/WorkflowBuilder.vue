@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, onBeforeUnmount } from 'vue'
+import { skillsApi, workflowsApi, favoritesApi } from '@/api'
 
 interface WorkflowNode {
   id: string
@@ -153,6 +154,269 @@ const edgeFromNode = ref<string | null>(null)
 const tempEdge = ref({ x1: 0, y1: 0, x2: 0, y2: 0 })
 const hoverTargetNode = ref<string | null>(null)
 
+// 搜索关键词
+const searchQuery = ref('')
+const isSearching = ref(false)
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+// 搜索结果（后端返回）
+const searchedSkills = ref<any[]>([])
+const searchedWorkflows = ref<any[]>([])
+
+// 搜索前保存的折叠状态
+let savedCollapsedSections: Set<string> | null = null
+
+// 监听搜索关键词变化，调用后端搜索
+watch(searchQuery, (newQuery) => {
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+  }
+
+  if (!newQuery.trim()) {
+    // 清空搜索时，恢复之前的折叠状态
+    searchedSkills.value = []
+    searchedWorkflows.value = []
+    if (savedCollapsedSections) {
+      collapsedSections.value = new Set(savedCollapsedSections)
+      savedCollapsedSections = null
+    }
+    return
+  }
+
+  // 防抖 300ms
+  searchDebounceTimer = setTimeout(async () => {
+    isSearching.value = true
+    try {
+      // 保存当前折叠状态（仅第一次搜索时）
+      if (!savedCollapsedSections) {
+        savedCollapsedSections = new Set(collapsedSections.value)
+      }
+
+      const [skillsResult, workflowsResult] = await Promise.all([
+        skillsApi.getAll(newQuery),
+        workflowsApi.getAll(newQuery)
+      ])
+      searchedSkills.value = skillsResult
+      searchedWorkflows.value = workflowsResult
+
+      // 展开有搜索结果的分组
+      const newCollapsed = new Set(collapsedSections.value)
+      if (skillsResult.length > 0) {
+        newCollapsed.delete('skills')
+      }
+      if (workflowsResult.length > 0) {
+        newCollapsed.delete('workflows')
+      }
+      collapsedSections.value = newCollapsed
+    } catch (error) {
+      console.error('Search failed:', error)
+    } finally {
+      isSearching.value = false
+    }
+  }, 300)
+})
+
+// 收藏列表（从后端加载）
+const favorites = ref<Set<string>>(new Set())
+const favoritesLoading = ref(false)
+
+// 从后端加载收藏列表
+const loadFavorites = async () => {
+  try {
+    favoritesLoading.value = true
+    const data = await favoritesApi.getAll()
+    const favoriteIds = [
+      ...data.skills.map(id => `skill-${id}`),
+      ...data.workflows.map(id => `workflow-${id}`)
+    ]
+    favorites.value = new Set(favoriteIds)
+  } catch (error) {
+    console.error('Failed to load favorites:', error)
+  } finally {
+    favoritesLoading.value = false
+  }
+}
+
+// 切换收藏状态（调用后端 API）
+const toggleFavorite = async (itemId: string, event: Event) => {
+  event.stopPropagation()
+
+  // 解析 itemId: "skill-xxx" 或 "workflow-xxx"
+  const [itemType, ...idParts] = itemId.split('-')
+  const realId = idParts.join('-')
+
+  if (itemType !== 'skill' && itemType !== 'workflow') {
+    console.error('Invalid item type:', itemType)
+    return
+  }
+
+  // 乐观更新 UI
+  const wasFavorited = favorites.value.has(itemId)
+  if (wasFavorited) {
+    favorites.value.delete(itemId)
+  } else {
+    favorites.value.add(itemId)
+  }
+  favorites.value = new Set(favorites.value)
+
+  // 调用后端 API
+  try {
+    await favoritesApi.toggle(itemType as 'skill' | 'workflow', realId)
+  } catch (error) {
+    console.error('Failed to toggle favorite:', error)
+    // 回滚 UI
+    if (wasFavorited) {
+      favorites.value.add(itemId)
+    } else {
+      favorites.value.delete(itemId)
+    }
+    favorites.value = new Set(favorites.value)
+  }
+}
+
+// 分组折叠状态
+const collapsedSections = ref<Set<string>>(new Set())
+
+// 帮助面板显示状态
+const showHelpPanel = ref(false)
+const showHelpTooltip = ref(false)
+const helpWrapperRef = ref<HTMLElement | null>(null)
+
+// 点击外部关闭帮助面板
+const handleClickOutside = (e: MouseEvent) => {
+  if (showHelpPanel.value && helpWrapperRef.value && !helpWrapperRef.value.contains(e.target as Node)) {
+    showHelpPanel.value = false
+  }
+}
+
+onMounted(() => {
+  loadFavorites()
+  document.addEventListener('click', handleClickOutside)
+})
+
+onBeforeUnmount(() => {
+  tooltip.value.show = false
+  document.removeEventListener('click', handleClickOutside)
+})
+
+const toggleSection = (section: string) => {
+  if (collapsedSections.value.has(section)) {
+    collapsedSections.value.delete(section)
+  } else {
+    collapsedSections.value.add(section)
+  }
+  collapsedSections.value = new Set(collapsedSections.value)
+}
+
+// 全部展开/折叠
+const allSections = ['favorites', 'skills', 'workflows']
+const isAllCollapsed = computed(() => {
+  return allSections.every(s => collapsedSections.value.has(s))
+})
+const toggleAllSections = () => {
+  if (isAllCollapsed.value) {
+    // 全部展开
+    collapsedSections.value = new Set()
+  } else {
+    // 全部折叠
+    collapsedSections.value = new Set(allSections)
+  }
+}
+
+// 大面板展开
+const hoverSection = ref<string | null>(null)
+const lockedSection = ref<string | null>(null)
+const panelTop = ref(0)
+let hoverCloseTimer: ReturnType<typeof setTimeout> | null = null
+
+const showGridPanel = computed(() => hoverSection.value || lockedSection.value)
+const activeSection = computed(() => lockedSection.value || hoverSection.value)
+
+// 计算面板位置 - 让面板的箭头对准按钮
+const updatePanelPosition = (e: MouseEvent) => {
+  const btn = e.currentTarget as HTMLElement
+  const body = document.querySelector('.body')
+  if (btn && body) {
+    const btnRect = btn.getBoundingClientRect()
+    const bodyRect = body.getBoundingClientRect()
+    // 面板顶部位置 = 按钮中心 - 箭头在面板中的位置(20px) - 偏移修正
+    const btnCenterY = btnRect.top + btnRect.height / 2 - bodyRect.top
+    panelTop.value = Math.max(0, btnCenterY - 80)
+  }
+}
+
+const onGridBtnEnter = (section: string, e: MouseEvent) => {
+  if (hoverCloseTimer) {
+    clearTimeout(hoverCloseTimer)
+    hoverCloseTimer = null
+  }
+  if (!lockedSection.value) {
+    hoverSection.value = section
+    updatePanelPosition(e)
+  }
+}
+const onGridBtnLeave = () => {
+  if (!lockedSection.value) {
+    // 延迟关闭，给用户时间移动到面板
+    hoverCloseTimer = setTimeout(() => {
+      hoverSection.value = null
+    }, 150)
+  }
+}
+const onPanelEnter = () => {
+  if (hoverCloseTimer) {
+    clearTimeout(hoverCloseTimer)
+    hoverCloseTimer = null
+  }
+}
+const onPanelLeave = () => {
+  if (!lockedSection.value) {
+    hoverSection.value = null
+  }
+}
+const onGridBtnClick = (section: string, e: MouseEvent) => {
+  if (lockedSection.value === section) {
+    // 已锁定同一个，解锁
+    lockedSection.value = null
+    hoverSection.value = null
+  } else {
+    // 锁定
+    lockedSection.value = section
+    hoverSection.value = null
+    updatePanelPosition(e)
+  }
+}
+const closeGridPanel = () => {
+  lockedSection.value = null
+  hoverSection.value = null
+}
+
+// 获取面板的项目列表
+const gridPanelItems = computed(() => {
+  switch (activeSection.value) {
+    case 'all':
+      return [...favoriteItems.value, ...filteredSkills.value, ...filteredWorkflows.value]
+    case 'favorites':
+      return favoriteItems.value
+    case 'skills':
+      return filteredSkills.value
+    case 'workflows':
+      return filteredWorkflows.value
+    default:
+      return []
+  }
+})
+
+const gridPanelTitle = computed(() => {
+  switch (activeSection.value) {
+    case 'all': return '全部组件'
+    case 'favorites': return '⭐ 收藏'
+    case 'skills': return 'Skills'
+    case 'workflows': return '子流程'
+    default: return ''
+  }
+})
+
 // 可用项目
 const availableItems = computed(() => {
   const skillItems = props.skills.map(s => ({
@@ -171,6 +435,45 @@ const availableItems = computed(() => {
     workflowData: w
   }))
   return [...skillItems, ...workflowItems]
+})
+
+// 过滤后的技能列表（后端搜索或 props 数据）
+const filteredSkills = computed(() => {
+  const query = searchQuery.value.trim()
+  if (!query) {
+    // 没有搜索时，使用 props 数据
+    return availableItems.value.filter(i => i.type === 'skill')
+  }
+  // 有搜索时，使用后端返回的结果
+  return searchedSkills.value.map(s => ({
+    id: `skill-${s.id}`,
+    type: 'skill' as const,
+    name: s.name,
+    icon: s.icon,
+    description: s.description
+  }))
+})
+
+// 过滤后的子流程列表（后端搜索或 props 数据）
+const filteredWorkflows = computed(() => {
+  const query = searchQuery.value.trim()
+  if (!query) {
+    return availableItems.value.filter(i => i.type === 'workflow')
+  }
+  return searchedWorkflows.value.map(w => ({
+    id: `workflow-${w.id}`,
+    type: 'workflow' as const,
+    name: w.name,
+    icon: w.icon,
+    description: w.description,
+    workflowData: w
+  }))
+})
+
+// 收藏的项目列表（收藏使用前端过滤，因为收藏数据在本地）
+const favoriteItems = computed(() => {
+  // 收藏项不受搜索影响，始终显示所有收藏
+  return availableItems.value.filter(i => favorites.value.has(i.id))
 })
 
 // 添加节点
@@ -445,18 +748,23 @@ const tooltip = ref<{
   style: { top: '0px', left: '0px' }
 })
 
-const handleItemMouseMove = (e: MouseEvent, item: any) => {
+const handleItemMouseEnter = (e: MouseEvent, item: any) => {
+  const target = e.currentTarget as HTMLElement
+  const rect = target.getBoundingClientRect()
   const tooltipWidth = 200
   const tooltipHeight = 80
 
-  let left = e.clientX + 12
-  let top = e.clientY + 12
+  // 固定显示在卡片右侧，不跟随鼠标
+  let left = rect.right + 8
+  let top = rect.top
 
+  // 如果右侧空间不够，显示在左侧
   if (left + tooltipWidth > window.innerWidth - 10) {
-    left = e.clientX - tooltipWidth - 8
+    left = rect.left - tooltipWidth - 8
   }
+  // 如果下方空间不够，往上调整
   if (top + tooltipHeight > window.innerHeight - 10) {
-    top = e.clientY - tooltipHeight - 8
+    top = window.innerHeight - tooltipHeight - 10
   }
 
   tooltip.value = {
@@ -504,10 +812,6 @@ const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
   }
 }
 
-// 组件卸载时清理 tooltip
-onBeforeUnmount(() => {
-  tooltip.value.show = false
-})
 </script>
 
 <template>
@@ -633,55 +937,313 @@ onBeforeUnmount(() => {
     <div class="body">
       <!-- Sidebar -->
       <aside class="sidebar">
-        <div class="section">
-          <div class="section-title">Skills <span>{{ skills.length }}</span></div>
-          <div class="item-list">
-            <div
-              v-for="item in availableItems.filter(i => i.type === 'skill')"
-              :key="item.id"
-              class="item"
-              draggable="true"
-              @dragstart="e => e.dataTransfer?.setData('application/json', JSON.stringify(item))"
-              @click="quickAdd(item)"
-              @mousemove="handleItemMouseMove($event, item)"
-              @mouseleave="handleItemMouseLeave"
+        <!-- 搜索框 -->
+        <div class="search-box">
+          <svg v-if="!isSearching" class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/>
+            <path d="m21 21-4.35-4.35"/>
+          </svg>
+          <div v-else class="search-spinner"></div>
+          <input
+            v-model="searchQuery"
+            type="text"
+            class="search-input"
+            placeholder="搜索..."
+          />
+          <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''">×</button>
+        </div>
+
+        <!-- 分组容器 -->
+        <div class="sections-container">
+          <div class="sections-header">
+            <span class="sections-label">组件列表</span>
+            <button class="toggle-all-btn" @click="toggleAllSections">
+              {{ isAllCollapsed ? '展开' : '折叠' }}
+            </button>
+            <button
+              class="grid-btn grid-btn-all"
+              :class="{ active: lockedSection === 'all' }"
+              @mouseenter="onGridBtnEnter('all', $event)"
+              @mouseleave="onGridBtnLeave"
+              @click="onGridBtnClick('all', $event)"
+              title="查看全部"
             >
-              <span class="item-icon">{{ item.icon }}</span>
-              <span class="item-name">{{ item.name }}</span>
-              <span class="item-add">+</span>
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <rect x="3" y="3" width="8" height="8" rx="1"/>
+                <rect x="13" y="3" width="8" height="8" rx="1"/>
+                <rect x="3" y="13" width="8" height="8" rx="1"/>
+                <rect x="13" y="13" width="8" height="8" rx="1"/>
+              </svg>
+            </button>
+          </div>
+          <div class="sections-body">
+        <!-- 收藏分组 -->
+        <div v-if="favoriteItems.length > 0" class="section section-favorites">
+          <div class="section-title">
+            <div class="section-title-left clickable" @click="toggleSection('favorites')">
+              <span class="section-toggle" :class="{ collapsed: collapsedSections.has('favorites') }">▼</span>
+              <span class="section-label">⭐ 收藏</span>
             </div>
+            <span class="section-count">{{ favoriteItems.length }}</span>
+            <button
+              class="grid-btn"
+              :class="{ active: lockedSection === 'favorites' }"
+              @mouseenter="onGridBtnEnter('favorites', $event)"
+              @mouseleave="onGridBtnLeave"
+              @click="onGridBtnClick('favorites', $event)"
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <rect x="3" y="3" width="8" height="8" rx="1"/>
+                <rect x="13" y="3" width="8" height="8" rx="1"/>
+                <rect x="3" y="13" width="8" height="8" rx="1"/>
+                <rect x="13" y="13" width="8" height="8" rx="1"/>
+              </svg>
+            </button>
+          </div>
+          <Transition name="collapse">
+            <div v-show="!collapsedSections.has('favorites')" class="item-list">
+              <div
+                v-for="item in favoriteItems"
+                :key="'fav-' + item.id"
+                class="item"
+                :class="{ workflow: item.type === 'workflow' }"
+                draggable="true"
+                @dragstart="e => e.dataTransfer?.setData('application/json', JSON.stringify(item))"
+                @click="quickAdd(item)"
+                @mouseenter="handleItemMouseEnter($event, item)"
+                @mouseleave="handleItemMouseLeave"
+              >
+                <span class="item-icon">{{ item.icon }}</span>
+                <span class="item-name">{{ item.name }}</span>
+                <span class="item-fav active" @click="toggleFavorite(item.id, $event)" title="取消收藏">★</span>
+                <span class="item-add">+</span>
+              </div>
+            </div>
+          </Transition>
+        </div>
+
+        <!-- Skills 分组 -->
+        <div class="section section-skills">
+          <div class="section-title">
+            <div class="section-title-left clickable" @click="toggleSection('skills')">
+              <span class="section-toggle" :class="{ collapsed: collapsedSections.has('skills') }">▼</span>
+              <span class="section-label">Skills</span>
+            </div>
+            <span class="section-count">{{ filteredSkills.length }}<template v-if="searchQuery">/{{ skills.length }}</template></span>
+            <button
+              class="grid-btn"
+              :class="{ active: lockedSection === 'skills' }"
+              @mouseenter="onGridBtnEnter('skills', $event)"
+              @mouseleave="onGridBtnLeave"
+              @click="onGridBtnClick('skills', $event)"
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <rect x="3" y="3" width="8" height="8" rx="1"/>
+                <rect x="13" y="3" width="8" height="8" rx="1"/>
+                <rect x="3" y="13" width="8" height="8" rx="1"/>
+                <rect x="13" y="13" width="8" height="8" rx="1"/>
+              </svg>
+            </button>
+          </div>
+          <Transition name="collapse">
+            <div v-show="!collapsedSections.has('skills')" class="item-list">
+              <div
+                v-for="item in filteredSkills"
+                :key="item.id"
+                class="item"
+                draggable="true"
+                @dragstart="e => e.dataTransfer?.setData('application/json', JSON.stringify(item))"
+                @click="quickAdd(item)"
+                @mouseenter="handleItemMouseEnter($event, item)"
+                @mouseleave="handleItemMouseLeave"
+              >
+                <span class="item-icon">{{ item.icon }}</span>
+                <span class="item-name">{{ item.name }}</span>
+                <span
+                  class="item-fav"
+                  :class="{ active: favorites.has(item.id) }"
+                  @click="toggleFavorite(item.id, $event)"
+                  :title="favorites.has(item.id) ? '取消收藏' : '添加收藏'"
+                >{{ favorites.has(item.id) ? '★' : '☆' }}</span>
+                <span class="item-add">+</span>
+              </div>
+              <div v-if="filteredSkills.length === 0 && searchQuery" class="no-results">
+                未找到匹配的技能
+              </div>
+            </div>
+          </Transition>
+        </div>
+
+        <!-- 子流程分组 -->
+        <div v-if="workflows.length" class="section section-workflows">
+          <div class="section-title">
+            <div class="section-title-left clickable" @click="toggleSection('workflows')">
+              <span class="section-toggle" :class="{ collapsed: collapsedSections.has('workflows') }">▼</span>
+              <span class="section-label">子流程</span>
+            </div>
+            <span class="section-count">{{ filteredWorkflows.length }}<template v-if="searchQuery">/{{ workflows.length }}</template></span>
+            <button
+              class="grid-btn"
+              :class="{ active: lockedSection === 'workflows' }"
+              @mouseenter="onGridBtnEnter('workflows', $event)"
+              @mouseleave="onGridBtnLeave"
+              @click="onGridBtnClick('workflows', $event)"
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <rect x="3" y="3" width="8" height="8" rx="1"/>
+                <rect x="13" y="3" width="8" height="8" rx="1"/>
+                <rect x="3" y="13" width="8" height="8" rx="1"/>
+                <rect x="13" y="13" width="8" height="8" rx="1"/>
+              </svg>
+            </button>
+          </div>
+          <Transition name="collapse">
+            <div v-show="!collapsedSections.has('workflows')" class="item-list">
+              <div
+                v-for="item in filteredWorkflows"
+                :key="item.id"
+                class="item workflow"
+                draggable="true"
+                @dragstart="e => e.dataTransfer?.setData('application/json', JSON.stringify(item))"
+                @click="quickAdd(item)"
+                @mouseenter="handleItemMouseEnter($event, item)"
+                @mouseleave="handleItemMouseLeave"
+              >
+                <span class="item-icon">{{ item.icon }}</span>
+                <span class="item-name">{{ item.name }}</span>
+                <span
+                  class="item-fav"
+                  :class="{ active: favorites.has(item.id) }"
+                  @click="toggleFavorite(item.id, $event)"
+                  :title="favorites.has(item.id) ? '取消收藏' : '添加收藏'"
+                >{{ favorites.has(item.id) ? '★' : '☆' }}</span>
+                <span class="item-add">+</span>
+              </div>
+              <div v-if="filteredWorkflows.length === 0 && searchQuery" class="no-results">
+                未找到匹配的子流程
+              </div>
+            </div>
+          </Transition>
+        </div>
           </div>
         </div>
 
-        <div v-if="workflows.length" class="section">
-          <div class="section-title">子流程 <span>{{ workflows.length }}</span></div>
-          <div class="item-list">
-            <div
-              v-for="item in availableItems.filter(i => i.type === 'workflow')"
-              :key="item.id"
-              class="item workflow"
-              draggable="true"
-              @dragstart="e => e.dataTransfer?.setData('application/json', JSON.stringify(item))"
-              @click="quickAdd(item)"
-              @mousemove="handleItemMouseMove($event, item)"
-              @mouseleave="handleItemMouseLeave"
-            >
-              <span class="item-icon">{{ item.icon }}</span>
-              <span class="item-name">{{ item.name }}</span>
-              <span class="item-add">+</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="section help">
-          <div class="section-title">操作指南</div>
-          <ul>
-            <li><span class="help-icon">➕</span> 点击添加节点</li>
-            <li><span class="help-icon">🔗</span> 从 <b>●→</b> 拖到 <b>●</b></li>
-            <li><span class="help-icon">🗑️</span> 点击连线删除</li>
-          </ul>
-        </div>
       </aside>
+
+      <!-- 大网格面板 - 覆盖在画布上 -->
+      <Transition name="grid-panel">
+        <div
+          v-if="showGridPanel"
+          class="grid-panel"
+          :style="{ top: panelTop + 'px' }"
+          @mouseenter="onPanelEnter"
+          @mouseleave="onPanelLeave"
+        >
+          <div class="grid-panel-arrow"></div>
+          <!-- 单个分组 -->
+          <template v-if="activeSection !== 'all'">
+            <div class="grid-panel-grid">
+              <div
+                v-for="item in gridPanelItems"
+                :key="'grid-' + item.id"
+                class="grid-item"
+                :class="{ workflow: item.type === 'workflow' }"
+                draggable="true"
+                @dragstart="e => { e.dataTransfer?.setData('application/json', JSON.stringify(item)); closeGridPanel() }"
+                @click="quickAdd(item); closeGridPanel()"
+                @mouseenter="handleItemMouseEnter($event, item)"
+                @mouseleave="handleItemMouseLeave"
+              >
+                <span
+                  v-if="activeSection !== 'favorites'"
+                  class="grid-item-fav"
+                  :class="{ active: favorites.has(item.id) }"
+                  @click.stop="toggleFavorite(item.id, $event)"
+                >{{ favorites.has(item.id) ? '★' : '☆' }}</span>
+                <span class="grid-item-icon">{{ item.icon }}</span>
+                <span class="grid-item-name">{{ item.name }}</span>
+              </div>
+            </div>
+            <div v-if="gridPanelItems.length === 0" class="grid-panel-empty">暂无内容</div>
+          </template>
+
+          <!-- 全部分组 -->
+          <template v-else>
+            <!-- 收藏 -->
+            <div v-if="favoriteItems.length > 0" class="grid-section">
+              <div class="grid-section-title">⭐ 收藏</div>
+              <div class="grid-panel-grid">
+                <div
+                  v-for="item in favoriteItems"
+                  :key="'grid-fav-' + item.id"
+                  class="grid-item"
+                  :class="{ workflow: item.type === 'workflow' }"
+                  draggable="true"
+                  @dragstart="e => { e.dataTransfer?.setData('application/json', JSON.stringify(item)); closeGridPanel() }"
+                  @click="quickAdd(item); closeGridPanel()"
+                  @mouseenter="handleItemMouseEnter($event, item)"
+                  @mouseleave="handleItemMouseLeave"
+                >
+                  <span class="grid-item-icon">{{ item.icon }}</span>
+                  <span class="grid-item-name">{{ item.name }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Skills -->
+            <div v-if="filteredSkills.length > 0" class="grid-section">
+              <div class="grid-section-title">Skills</div>
+              <div class="grid-panel-grid">
+                <div
+                  v-for="item in filteredSkills"
+                  :key="'grid-skill-' + item.id"
+                  class="grid-item"
+                  draggable="true"
+                  @dragstart="e => { e.dataTransfer?.setData('application/json', JSON.stringify(item)); closeGridPanel() }"
+                  @click="quickAdd(item); closeGridPanel()"
+                  @mouseenter="handleItemMouseEnter($event, item)"
+                  @mouseleave="handleItemMouseLeave"
+                >
+                  <span
+                    class="grid-item-fav"
+                    :class="{ active: favorites.has(item.id) }"
+                    @click.stop="toggleFavorite(item.id, $event)"
+                  >{{ favorites.has(item.id) ? '★' : '☆' }}</span>
+                  <span class="grid-item-icon">{{ item.icon }}</span>
+                  <span class="grid-item-name">{{ item.name }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 子流程 -->
+            <div v-if="filteredWorkflows.length > 0" class="grid-section">
+              <div class="grid-section-title">子流程</div>
+              <div class="grid-panel-grid">
+                <div
+                  v-for="item in filteredWorkflows"
+                  :key="'grid-wf-' + item.id"
+                  class="grid-item workflow"
+                  draggable="true"
+                  @dragstart="e => { e.dataTransfer?.setData('application/json', JSON.stringify(item)); closeGridPanel() }"
+                  @click="quickAdd(item); closeGridPanel()"
+                  @mouseenter="handleItemMouseEnter($event, item)"
+                  @mouseleave="handleItemMouseLeave"
+                >
+                  <span
+                    class="grid-item-fav"
+                    :class="{ active: favorites.has(item.id) }"
+                    @click.stop="toggleFavorite(item.id, $event)"
+                  >{{ favorites.has(item.id) ? '★' : '☆' }}</span>
+                  <span class="grid-item-icon">{{ item.icon }}</span>
+                  <span class="grid-item-name">{{ item.name }}</span>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <button v-if="lockedSection" class="grid-panel-close" @click="closeGridPanel">×</button>
+        </div>
+      </Transition>
 
       <!-- Canvas -->
       <div
@@ -796,6 +1358,57 @@ onBeforeUnmount(() => {
 
           <!-- 删除按钮 -->
           <button class="delete-btn" @click.stop="deleteNode(node.id)">×</button>
+        </div>
+
+        <!-- 帮助按钮 - 右下角悬浮 -->
+        <div class="help-fab" ref="helpWrapperRef">
+          <button
+            class="help-fab-btn"
+            @click.stop="showHelpPanel = !showHelpPanel"
+            :class="{ active: showHelpPanel }"
+            @mouseenter="showHelpTooltip = true"
+            @mouseleave="showHelpTooltip = false"
+          >
+            <span class="help-fab-icon">?</span>
+          </button>
+          <!-- 悬停提示 -->
+          <Transition name="help-tip">
+            <div v-if="showHelpTooltip && !showHelpPanel" class="help-fab-tooltip">
+              操作指南
+            </div>
+          </Transition>
+          <!-- 展开的帮助面板 -->
+          <Transition name="help-panel">
+            <div v-if="showHelpPanel" class="help-fab-panel">
+              <div class="help-fab-panel-header">
+                <span>操作指南</span>
+                <button class="help-fab-close" @click="showHelpPanel = false">×</button>
+              </div>
+              <ul>
+                <li>
+                  <span class="help-step">1</span>
+                  <div class="help-content">
+                    <strong>添加节点</strong>
+                    <p>点击左侧列表或拖拽到画布</p>
+                  </div>
+                </li>
+                <li>
+                  <span class="help-step">2</span>
+                  <div class="help-content">
+                    <strong>连接节点</strong>
+                    <p>从右侧 <b class="port-out">●→</b> 拖到左侧 <b class="port-in">●</b></p>
+                  </div>
+                </li>
+                <li>
+                  <span class="help-step">3</span>
+                  <div class="help-content">
+                    <strong>删除连线</strong>
+                    <p>点击连线即可删除</p>
+                  </div>
+                </li>
+              </ul>
+            </div>
+          </Transition>
         </div>
 
         <!-- Empty -->
@@ -998,43 +1611,632 @@ onBeforeUnmount(() => {
 }
 
 /* Body */
-.body { flex: 1; display: flex; overflow: hidden; }
+.body { flex: 1; display: flex; overflow: hidden; position: relative; }
 
 /* Sidebar */
 .sidebar {
-  width: 170px; background: #fff; border-right: 1px solid #e2e8f0;
-  padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px;
+  width: 180px;
+  background: #fff;
+  border-right: 1px solid #e5e7eb;
+  padding: 10px 10px 10px 8px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
 }
-.section { display: flex; flex-direction: column; gap: 6px; }
-.section-title {
-  font-size: 10px; font-weight: 600; color: #94a3b8;
-  text-transform: uppercase; letter-spacing: 0.5px;
-  display: flex; justify-content: space-between;
-}
-.section-title span { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; font-size: 9px; }
 
-.item-list { display: flex; flex-direction: column; gap: 3px; }
+/* 搜索框 */
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+/* 分组容器 */
+.sections-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.sections-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+  flex-shrink: 0;
+}
+
+.sections-label {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+.toggle-all-btn {
+  padding: 2px 8px;
+  border: none;
+  background: transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 10px;
+  color: #6366f1;
+  transition: all 0.15s;
+}
+.toggle-all-btn:hover {
+  background: #eef2ff;
+}
+
+.sections-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0 6px 6px; /* 右边无padding，让grid-btn与header对齐 */
+}
+
+/* 大网格面板 - 覆盖画布 */
+.grid-panel {
+  position: absolute;
+  top: 0;
+  left: 182px;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  box-shadow: 4px 4px 24px rgba(0,0,0,0.18);
+  z-index: 50;
+  padding: 14px;
+  display: inline-block;
+}
+
+/* 箭头指向 */
+.grid-panel-arrow {
+  position: absolute;
+  left: -7px;
+  top: 12px;
+  width: 0;
+  height: 0;
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+  border-right: 7px solid #d1d5db;
+}
+.grid-panel-arrow::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: -7px;
+  width: 0;
+  height: 0;
+  border-top: 7px solid transparent;
+  border-bottom: 7px solid transparent;
+  border-right: 6px solid #fff;
+}
+
+.grid-panel-close {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: #ef4444;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 4px rgba(239,68,68,0.3);
+  transition: transform 0.15s;
+}
+.grid-panel-close:hover {
+  transform: scale(1.1);
+}
+
+.grid-panel-grid {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: calc(110px * 3 + 8px * 2); /* 最多3列 */
+}
+
+.grid-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 110px;
+  height: 72px;
+  flex-shrink: 0;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.grid-item:hover {
+  background: #fff;
+  border-color: #6366f1;
+  box-shadow: 0 2px 8px rgba(99,102,241,0.15);
+}
+.grid-item.workflow {
+  background: #faf5ff;
+  border-color: #e9d5ff;
+}
+.grid-item.workflow:hover {
+  border-color: #a78bfa;
+}
+.grid-item-fav {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  font-size: 14px;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all 0.15s;
+  line-height: 1;
+  z-index: 1;
+}
+.grid-item-fav:hover {
+  color: #f59e0b;
+  transform: scale(1.15);
+}
+.grid-item-fav.active {
+  color: #d97706;
+}
+
+.grid-item-icon {
+  font-size: 26px;
+  line-height: 1;
+}
+
+.grid-item-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: #374151;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+  padding: 0 6px;
+  line-height: 1.1;
+}
+
+.grid-panel-empty {
+  text-align: center;
+  padding: 15px;
+  color: #9ca3af;
+  font-size: 10px;
+}
+
+/* 分组分隔 */
+.grid-section {
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #e5e7eb;
+}
+.grid-section:last-child {
+  padding-bottom: 0;
+  margin-bottom: 0;
+  border-bottom: none;
+}
+
+.grid-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: #6b7280;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+/* 网格面板动画 */
+.grid-panel-enter-active,
+.grid-panel-leave-active {
+  transition: all 0.15s ease;
+}
+.grid-panel-enter-from,
+.grid-panel-leave-to {
+  opacity: 0;
+  transform: scale(0.95);
+}
+.search-icon {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 12px;
+  color: #9ca3af;
+  pointer-events: none;
+}
+.search-spinner {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid #e5e7eb;
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.search-input {
+  width: 100%;
+  padding: 6px 22px 6px 26px;
+  border: 1px solid #e5e7eb;
+  border-radius: 5px;
+  font-size: 11px;
+  outline: none;
+  background: #f9fafb;
+  transition: border-color 0.15s, background 0.15s;
+  height: 28px;
+  box-sizing: border-box;
+}
+.search-input:focus {
+  border-color: #a5b4fc;
+  background: #fff;
+}
+.search-input::placeholder {
+  color: #9ca3af;
+}
+.search-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: #e5e7eb;
+  border-radius: 50%;
+  font-size: 11px;
+  line-height: 1;
+  color: #6b7280;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.search-clear:hover {
+  background: #d1d5db;
+  color: #374151;
+}
+.no-results {
+  padding: 8px;
+  text-align: center;
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.section + .section {
+  margin-top: 6px;
+}
+.section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #374151;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: 4px;
+  background: #e5e7eb;
+}
+.section-title-left {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+.section-title-left.clickable {
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: 3px;
+  transition: background 0.15s;
+}
+.section-title-left.clickable:hover { background: rgba(0,0,0,0.08); }
+
+.section-count {
+  font-size: 10px;
+  color: #4b5563;
+  font-weight: 600;
+  background: #fff;
+  padding: 2px 6px;
+  border-radius: 10px;
+  min-width: 20px;
+  text-align: center;
+}
+
+/* 四格按钮 */
+.grid-btn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9ca3af;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+.grid-btn:hover {
+  color: #6366f1;
+  background: #eef2ff;
+}
+.grid-btn.active {
+  color: #6366f1;
+  background: #e0e7ff;
+}
+.grid-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.section-label { flex: 1; }
+
+.section-toggle {
+  font-size: 8px;
+  margin-right: 6px;
+  transition: transform 0.2s;
+  display: inline-block;
+  color: #9ca3af;
+}
+.section-toggle.collapsed { transform: rotate(-90deg); }
+
+/* 折叠动画 */
+.collapse-enter-active,
+.collapse-leave-active {
+  transition: all 0.15s ease;
+  overflow: hidden;
+}
+.collapse-enter-from,
+.collapse-leave-to {
+  opacity: 0;
+  max-height: 0;
+}
+.collapse-enter-to,
+.collapse-leave-from {
+  opacity: 1;
+  max-height: 400px;
+}
+
+.item-list { display: flex; flex-direction: column; gap: 1px; margin-top: 4px; }
 .item {
   display: flex; align-items: center; gap: 6px;
-  padding: 7px 8px; background: #f8fafc; border: 1px solid #e2e8f0;
-  border-radius: 6px; cursor: pointer; transition: all 0.15s;
+  padding: 5px 6px; background: transparent;
+  border-radius: 3px; cursor: pointer; transition: all 0.15s;
 }
-.item:hover { background: #f1f5f9; border-color: #6366f1; }
+.item:hover { background: #f3f4f6; }
 .item:hover .item-add { opacity: 1; }
-.item.workflow { background: rgba(99,102,241,0.06); border-color: rgba(99,102,241,0.2); }
-.item-icon { font-size: 13px; }
-.item-name { flex: 1; font-size: 11px; font-weight: 500; color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.item-add { font-size: 12px; font-weight: 600; color: #6366f1; opacity: 0; transition: opacity 0.15s; }
-
-.section.help { margin-top: auto; padding-top: 10px; border-top: 1px solid #e2e8f0; }
-.section.help ul { list-style: none; padding: 0; margin: 0; font-size: 10px; color: #64748b; }
-.section.help li {
-  display: flex; align-items: center; gap: 6px;
-  padding: 4px 0; border-bottom: 1px dashed #f1f5f9;
+.item-icon { font-size: 12px; }
+.item-name { flex: 1; font-size: 11px; font-weight: 500; color: #374151; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item-fav {
+  font-size: 11px;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: color 0.15s;
 }
-.section.help li:last-child { border-bottom: none; }
-.section.help .help-icon { font-size: 11px; }
-.section.help b { color: #6366f1; font-weight: 700; }
+.item-fav:hover { color: #fbbf24; }
+.item-fav.active { color: #f59e0b; }
+.item-add { font-size: 10px; font-weight: 500; color: #9ca3af; opacity: 0; transition: opacity 0.15s; }
+
+/* 帮助悬浮按钮 - 右下角 */
+.help-fab {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 100;
+}
+
+.help-fab-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  color: #6b7280;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  transition: all 0.2s ease;
+}
+
+.help-fab-btn:hover {
+  background: #f9fafb;
+  border-color: #6366f1;
+  color: #6366f1;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.15);
+}
+
+.help-fab-btn.active {
+  background: #6366f1;
+  border-color: #6366f1;
+  color: #fff;
+}
+
+.help-fab-icon {
+  transition: transform 0.2s ease;
+}
+
+.help-fab-btn.active .help-fab-icon {
+  transform: rotate(45deg);
+}
+
+/* 悬停提示 */
+.help-fab-tooltip {
+  position: absolute;
+  right: 40px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: #374151;
+  color: #fff;
+  font-size: 11px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.help-fab-tooltip::after {
+  content: '';
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 4px solid transparent;
+  border-left-color: #374151;
+}
+
+/* 帮助面板 */
+.help-fab-panel {
+  position: absolute;
+  right: 0;
+  bottom: 40px;
+  width: 220px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+.help-fab-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+  color: #374151;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.help-fab-close {
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  border-radius: 3px;
+  color: #9ca3af;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.help-fab-close:hover {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.help-fab-panel ul {
+  list-style: none;
+  padding: 6px 0;
+  margin: 0;
+}
+
+.help-fab-panel li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+}
+
+.help-step {
+  width: 18px;
+  height: 18px;
+  background: #f3f4f6;
+  color: #6b7280;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.help-content {
+  flex: 1;
+}
+
+.help-content strong {
+  display: block;
+  font-size: 11px;
+  color: #374151;
+  font-weight: 600;
+}
+
+.help-content p {
+  margin: 2px 0 0;
+  font-size: 10px;
+  color: #6b7280;
+  line-height: 1.3;
+}
+
+.help-content .port-out {
+  color: #6366f1;
+  font-weight: 600;
+}
+
+.help-content .port-in {
+  color: #10b981;
+  font-weight: 600;
+}
+
+/* 帮助面板动画 */
+.help-panel-enter-active,
+.help-panel-leave-active {
+  transition: all 0.15s ease;
+}
+.help-panel-enter-from,
+.help-panel-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+/* tooltip 动画 */
+.help-tip-enter-active,
+.help-tip-leave-active {
+  transition: all 0.1s ease;
+}
+.help-tip-enter-from,
+.help-tip-leave-to {
+  opacity: 0;
+}
 
 /* Canvas */
 .canvas {
