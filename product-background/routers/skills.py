@@ -68,8 +68,10 @@ async def create_skill(skill_data: SkillCreate, db: Session = Depends(get_db)):
 
     # 如果提供了代码，创建 Python 脚本
     if skill_data.code:
+        # 自动转换代码格式
+        transformed_code = transform_code_to_api_format(skill_data.code, skill_data.name)
         script_path = skill_folder / entry_script
-        script_path.write_text(skill_data.code, encoding="utf-8")
+        script_path.write_text(transformed_code, encoding="utf-8")
     else:
         # 没有提供代码，创建 AI 型技能（SKILL.md）
         skill_md_content = f"""# {skill_data.name}
@@ -421,10 +423,11 @@ async def update_skill(
     db: Session = Depends(get_db)
 ):
     """
-    更新技能 - 创建新版本
+    更新技能
 
-    修改会创建新版本记录和新文件夹，老版本标记为 deprecated。
-    新版本继承 group_id 和 original_created_at，保持排序位置不变。
+    支持两种模式（通过 update_mode 参数）：
+    - overwrite: 覆盖当前版本，直接修改，不保留历史
+    - new_version: 创建新版本（默认），老版本标记为 deprecated
     """
     old_skill = db.query(Skill).filter(Skill.id == skill_id).first()
     if not old_skill:
@@ -432,27 +435,12 @@ async def update_skill(
 
     update_data = skill_data.model_dump(exclude_unset=True)
 
-    # 生成新版本 ID 和文件夹
-    new_skill_id = str(uuid.uuid4())
-    new_skill_folder = SKILLS_STORAGE_DIR / new_skill_id
-    new_skill_folder.mkdir(parents=True, exist_ok=True)
-
-    # 复制老文件夹内容到新文件夹（如果存在）
-    if old_skill.folder_path:
-        old_folder = SKILLS_STORAGE_DIR / old_skill.folder_path
-        if old_folder.exists():
-            for item in old_folder.iterdir():
-                if item.is_file():
-                    shutil.copy2(str(item), str(new_skill_folder / item.name))
-                elif item.is_dir():
-                    shutil.copytree(str(item), str(new_skill_folder / item.name))
+    # 提取更新模式
+    update_mode = update_data.pop("update_mode", "new_version")
+    print(f"[UpdateSkill] Mode: {update_mode}, Skill: {old_skill.name}")
 
     # 处理代码更新
     code = update_data.pop("code", None)
-    if code is not None:
-        script_name = update_data.get("entry_script") or old_skill.entry_script or "main.py"
-        script_path = new_skill_folder / script_name
-        script_path.write_text(code, encoding="utf-8")
 
     # 处理 interactions
     interactions_data = old_skill.interactions or []
@@ -469,6 +457,84 @@ async def update_skill(
         output_cfg = update_data["output_config"]
         output_config_data = output_cfg.model_dump() if hasattr(output_cfg, 'model_dump') else output_cfg
         del update_data["output_config"]
+
+    # ========== 覆盖模式 ==========
+    if update_mode == "overwrite":
+        # 直接修改当前文件夹
+        skill_folder = SKILLS_STORAGE_DIR / old_skill.folder_path if old_skill.folder_path else None
+
+        # 如果没有文件夹，创建一个
+        if not skill_folder or not skill_folder.exists():
+            skill_folder = SKILLS_STORAGE_DIR / skill_id
+            skill_folder.mkdir(parents=True, exist_ok=True)
+            old_skill.folder_path = skill_id
+
+        # 更新代码文件
+        if code is not None:
+            # 自动转换代码格式
+            transformed_code = transform_code_to_api_format(code, old_skill.name)
+            script_name = update_data.get("entry_script") or old_skill.entry_script or "main.py"
+            script_path = skill_folder / script_name
+            script_path.write_text(transformed_code, encoding="utf-8")
+
+        # 更新 config.json
+        config = {
+            "name": update_data.get("name") or old_skill.name,
+            "description": update_data.get("description") or old_skill.description,
+            "icon": update_data.get("icon") or old_skill.icon,
+            "tags": update_data.get("tags") or old_skill.tags or [],
+            "author": update_data.get("author") or old_skill.author,
+            "version": old_skill.version,  # 覆盖模式不改版本号
+            "entry_script": update_data.get("entry_script") or old_skill.entry_script,
+            "output_config": output_config_data
+        }
+        config_path = skill_folder / "config.json"
+        config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        # 直接更新数据库记录
+        if "name" in update_data:
+            old_skill.name = update_data["name"]
+        if "description" in update_data:
+            old_skill.description = update_data["description"]
+        if "icon" in update_data:
+            old_skill.icon = update_data["icon"]
+        if "tags" in update_data:
+            old_skill.tags = update_data["tags"]
+        if "entry_script" in update_data:
+            old_skill.entry_script = update_data["entry_script"]
+        if "author" in update_data:
+            old_skill.author = update_data["author"]
+        old_skill.interactions = interactions_data
+        old_skill.output_config = output_config_data
+
+        db.commit()
+        db.refresh(old_skill)
+        print(f"[UpdateSkill] Overwrite complete: {old_skill.name}")
+        return old_skill
+
+    # ========== 新版本模式 (默认) ==========
+    # 生成新版本 ID 和文件夹
+    new_skill_id = str(uuid.uuid4())
+    new_skill_folder = SKILLS_STORAGE_DIR / new_skill_id
+    new_skill_folder.mkdir(parents=True, exist_ok=True)
+
+    # 复制老文件夹内容到新文件夹（如果存在）
+    if old_skill.folder_path:
+        old_folder = SKILLS_STORAGE_DIR / old_skill.folder_path
+        if old_folder.exists():
+            for item in old_folder.iterdir():
+                if item.is_file():
+                    shutil.copy2(str(item), str(new_skill_folder / item.name))
+                elif item.is_dir():
+                    shutil.copytree(str(item), str(new_skill_folder / item.name))
+
+    # 更新代码文件
+    if code is not None:
+        # 自动转换代码格式
+        transformed_code = transform_code_to_api_format(code, old_skill.name)
+        script_name = update_data.get("entry_script") or old_skill.entry_script or "main.py"
+        script_path = new_skill_folder / script_name
+        script_path.write_text(transformed_code, encoding="utf-8")
 
     # 计算新版本号
     old_version = old_skill.version or "1.0.0"
@@ -517,6 +583,7 @@ async def update_skill(
     db.add(new_skill)
     db.commit()
     db.refresh(new_skill)
+    print(f"[UpdateSkill] New version created: {new_skill.name} v{new_skill.version}")
     return new_skill
 
 
@@ -652,6 +719,147 @@ async def get_skill_file_content(
         return {"content": None, "binary": True, "size": file_full_path.stat().st_size}
 
 
+# ============ 代码格式转换 ============
+
+def transform_code_to_api_format(code: str, skill_name: str = "skill") -> str:
+    """
+    将任意风格的代码自动转换为 API 兼容格式
+
+    如果代码已经有 def main(params)，直接返回
+    否则查找主函数并生成 main(params) 包装
+    """
+    import re
+
+    # 已经是正确格式，直接返回
+    if "def main(params)" in code:
+        print(f"[CodeTransform] Code already has main(params), skipping")
+        return code
+
+    print(f"[CodeTransform] Transforming code for skill: {skill_name}")
+
+    # 查找可能的主函数 - 使用优先级评分
+    func_pattern = r'def\s+(\w+)\s*\([^)]*\)'
+    all_funcs = re.findall(func_pattern, code)
+    print(f"[CodeTransform] Found functions: {all_funcs}")
+
+    # 排除辅助函数
+    exclude_funcs = {'convert_value', 'helper', 'utils', '__init__', 'setup', 'init'}
+
+    candidates = []
+    for func_name in all_funcs:
+        if func_name.startswith('_') or func_name in exclude_funcs:
+            continue
+
+        score = 0
+        func_lower = func_name.lower()
+
+        # 高优先级：明确的转换函数
+        if 'excel' in func_lower and 'json' in func_lower:
+            score = 100
+        elif '_to_' in func_lower:
+            score = 90
+        elif any(kw in func_lower for kw in ['convert', 'transform', 'process', 'parse', 'export']):
+            score = 80
+        elif any(kw in func_lower for kw in ['excel', 'csv', 'json', 'pdf', 'xml']):
+            score = 70
+        elif func_lower in ('main', 'run', 'execute'):
+            score = 50
+        elif any(kw in func_lower for kw in ['read', 'write', 'load', 'save', 'get', 'create']):
+            score = 40
+        else:
+            score = 10
+
+        candidates.append((score, func_name))
+
+    if not candidates:
+        print(f"[CodeTransform] No suitable function found, returning original code")
+        return code
+
+    # 选择得分最高的函数
+    candidates.sort(reverse=True)
+    print(f"[CodeTransform] Candidates: {candidates}")
+    main_func_name = candidates[0][1]
+    print(f"[CodeTransform] Selected function: {main_func_name}")
+
+    # 生成包装代码 - 完全自包含，使用 _output_file 以匹配系统检测逻辑
+    wrapper = f'''
+
+# ========== 自动生成的 API 包装 ==========
+def main(params):
+    """
+    API 入口函数（自动生成）
+    """
+    import json
+    import uuid
+    from pathlib import Path
+    from datetime import datetime
+
+    # 输出目录
+    _outputs_dir = Path(__file__).parent.parent.parent / "outputs"
+    _outputs_dir.mkdir(exist_ok=True)
+
+    def _generate_unique_filename(ext):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"{{timestamp}}_{{uuid.uuid4().hex[:8]}}.{{ext}}"
+
+    # 获取输入
+    files = params.get('files', [])
+    file_path = params.get('file_path', '')
+
+    print(f"[AutoWrapper] files: {{files}}, file_path: {{file_path}}")
+
+    # 确定要处理的文件
+    if files:
+        input_file = files[0]
+    elif file_path:
+        input_file = file_path
+    else:
+        return {{'status': 'error', 'message': '请上传文件'}}
+
+    print(f"[AutoWrapper] Calling {main_func_name} with: {{input_file}}")
+
+    try:
+        # 调用原始函数
+        result = {main_func_name}(input_file)
+        print(f"[AutoWrapper] Result type: {{type(result)}}")
+
+        # 处理结果
+        if isinstance(result, str):
+            try:
+                json.loads(result)
+                output_name = _generate_unique_filename('json')
+                output_path = _outputs_dir / output_name
+                output_path.write_text(result, encoding='utf-8')
+                return {{
+                    'status': 'success',
+                    'message': '转换完成',
+                    'content': result,
+                    '_output_file': {{'path': str(output_path), 'type': 'json', 'name': output_name, 'url': f'/outputs/{{output_name}}'}}
+                }}
+            except json.JSONDecodeError:
+                return {{'status': 'success', 'message': result, 'content': result}}
+        elif isinstance(result, (dict, list)):
+            json_str = json.dumps(result, ensure_ascii=False, indent=2)
+            output_name = _generate_unique_filename('json')
+            output_path = _outputs_dir / output_name
+            output_path.write_text(json_str, encoding='utf-8')
+            return {{
+                'status': 'success',
+                'message': '处理完成',
+                'content': result,
+                '_output_file': {{'path': str(output_path), 'type': 'json', 'name': output_name, 'url': f'/outputs/{{output_name}}'}}
+            }}
+        else:
+            return {{'status': 'success', 'message': str(result), 'content': str(result)}}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {{'status': 'error', 'message': str(e)}}
+'''
+    print(f"[CodeTransform] Wrapper generated for {main_func_name}")
+    return code + wrapper
+
+
 # ============ 临时技能（测试用）============
 
 @router.post("/temp", status_code=201)
@@ -671,8 +879,10 @@ async def create_temp_skill(skill_data: SkillCreate):
 
     # 创建技能文件
     if skill_data.code:
+        # 自动转换代码格式
+        transformed_code = transform_code_to_api_format(skill_data.code, skill_data.name)
         script_path = temp_folder / entry_script
-        script_path.write_text(skill_data.code, encoding="utf-8")
+        script_path.write_text(transformed_code, encoding="utf-8")
     else:
         # AI 型技能
         skill_md_content = f"""# {skill_data.name}

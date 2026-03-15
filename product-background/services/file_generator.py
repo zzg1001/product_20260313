@@ -336,6 +336,23 @@ def detect_file_type(skill_name: str, skill_description: str = "", params: Dict 
             print(f"[FileType] Exact extension match: {ext}")
             return info
 
+    # 3.5. 高优先级数据格式检测 - 这些格式应该优先于 HTML
+    # 当用户明确提到这些格式时，不应该默认生成 HTML
+    high_priority_formats = [
+        ("json", ["json", "转换成json", "转成json", "导出json", "生成json"]),
+        ("xlsx", ["excel", "xlsx", "xls", "电子表格"]),
+        ("csv", ["csv"]),
+        ("xml", ["xml"]),
+        ("yaml", ["yaml", "yml"]),
+        ("txt", ["txt", "文本文件", "纯文本"]),
+        ("md", ["markdown", "md文件"]),
+    ]
+    for ext, keywords in high_priority_formats:
+        for kw in keywords:
+            if kw in combined:
+                print(f"[FileType] High-priority format detected: {ext} (keyword: {kw})")
+                return FILE_TYPES[ext]
+
     # 4. 关键词匹配
     best_match = None
     best_score = 0

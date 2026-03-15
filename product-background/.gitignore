@@ -27,3 +27,8 @@ htmlcov/
 
 # Logs
 *.log
+
+# 运行时生成的文件
+outputs/
+uploads/
+skills_storage_temp/

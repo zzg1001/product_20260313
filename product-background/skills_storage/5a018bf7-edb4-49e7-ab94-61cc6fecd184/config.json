@@ -1,0 +1,13 @@
+{
+  "name": "帮我创建一个-excel-json",
+  "description": "帮我创建一个 Excel 转 JSON 的技能 用默认",
+  "icon": "⚡",
+  "tags": [
+    "自动创建"
+  ],
+  "author": null,
+  "version": "1.0.0",
+  "entry_script": "main.py",
+  "type": "python",
+  "output_config": null
+}

@@ -57,6 +57,8 @@ class SkillUpdate(BaseModel):
     interactions: Optional[List[SkillInteraction]] = None
     output_config: Optional[OutputConfig] = None  # 输出配置
     code: Optional[str] = None  # 更新脚本代码
+    # 更新模式: overwrite=覆盖当前版本, new_version=创建新版本
+    update_mode: Optional[Literal["overwrite", "new_version"]] = "new_version"
 
 
 class SkillResponse(BaseModel):

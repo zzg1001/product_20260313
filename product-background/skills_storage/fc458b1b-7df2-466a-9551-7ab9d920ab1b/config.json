@@ -1,0 +1,13 @@
+{
+  "name": "帮生成json文件转excel的文件-生成通用版本",
+  "description": "帮生成json文件转excel的文件 生成通用版本",
+  "icon": "⚡",
+  "tags": [
+    "自动创建"
+  ],
+  "author": null,
+  "version": "1.0.0",
+  "entry_script": "main.py",
+  "type": "python",
+  "output_config": null
+}

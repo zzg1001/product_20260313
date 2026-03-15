@@ -17,7 +17,7 @@ interface SkillStep {
   skillName: string
   skillIcon: string
   description: string
-  status: 'pending' | 'running' | 'completed' | 'error' | 'missing'
+  status: 'pending' | 'running' | 'completed' | 'error' | 'missing' | 'configuring'
   output?: string
   userInput?: string  // 用户输入的参数/指令
   outputFile?: OutputFile  // 输出文件
@@ -25,6 +25,14 @@ interface SkillStep {
     error?: string
     output?: string
   }
+  // 历史执行结果（重跑时保留之前的结果）
+  outputHistory?: {
+    id: number
+    timestamp: Date
+    output?: string
+    outputFile?: OutputFile
+    userInput?: string
+  }[]
 }
 
 interface PipelineEdge {
@@ -300,7 +308,7 @@ const pendingSaveGroup = ref<PipelineGroup | null>(null)
 const showSkillExecution = ref(false)
 const executingSkill = ref<{ name: string; icon: string; description: string } | null>(null)
 const executionContext = ref<string>('')
-const executingStepInfo = ref<{ messageId: number; stepId: number } | null>(null)
+const executingStepInfo = ref<{ messageId: number; stepId: number; fromPaused?: boolean } | null>(null)
 
 // 右侧技能面板相关状态
 interface SkillPanelMessage {
@@ -481,7 +489,40 @@ const generatePanelGreeting = (skill: { name: string; description: string }, con
 }
 
 // 关闭技能执行面板
-const closeSkillExecution = () => {
+const closeSkillExecution = (cancelled = false) => {
+  // 如果是取消关闭，恢复 configuring 状态的步骤
+  if (cancelled && executingStepInfo.value) {
+    const { messageId, stepId, fromPaused } = executingStepInfo.value
+    const msg = messages.value.find(m => m.id === messageId)
+    if (msg?.skillPlan) {
+      const stepIndex = msg.skillPlan.findIndex(s => s.id === stepId)
+      if (stepIndex !== -1) {
+        const currentStep = msg.skillPlan[stepIndex]
+
+        if (fromPaused) {
+          // 从暂停状态取消，恢复为 running（暂停状态）
+          currentStep.status = 'running'
+          // 不需要重置 pendingExecution，保持暂停状态
+        } else {
+          // 从完成状态重跑取消，恢复历史状态
+          for (let i = stepIndex; i < msg.skillPlan.length; i++) {
+            const s = msg.skillPlan[i]
+            if (s.outputHistory?.length) {
+              const lastHistory = s.outputHistory.pop()
+              s.status = 'completed'
+              s.output = lastHistory?.output
+              s.outputFile = lastHistory?.outputFile
+              s.userInput = lastHistory?.userInput
+            } else {
+              s.status = 'pending'
+            }
+          }
+          pendingExecution.value = null
+        }
+      }
+    }
+  }
+
   showSkillExecution.value = false
   executingSkill.value = null
   executionContext.value = ''
@@ -618,7 +659,7 @@ const continueAddDetails = () => {
 
 // 取消执行
 const cancelSkillExecution = () => {
-  closeSkillExecution()
+  closeSkillExecution(true)  // 传入 true 表示取消，需要恢复状态
 }
 
 // 执行技能 - 传递用户输入内容
@@ -1080,8 +1121,8 @@ const openSkillForRerun = (messageId: number, stepId: number) => {
   const msg = messages.value.find(m => m.id === messageId)
   if (!msg?.skillPlan) return
 
-  // 如果流程正在运行，不允许点击
-  if (isPipelineRunning(messageId)) return
+  // 如果流程正在运行（非暂停状态），不允许点击
+  if (isPipelineRunning(messageId) && !isPaused.value) return
 
   // 找到步骤索引
   const startIndex = msg.skillPlan.findIndex(s => s.id === stepId)
@@ -1089,11 +1130,29 @@ const openSkillForRerun = (messageId: number, stepId: number) => {
 
   const step = msg.skillPlan[startIndex]
 
-  // 重置该步骤及之后所有步骤的状态为 pending（这样配置完成后会从这里开始执行）
+  // 保存当前结果到历史记录（如果有结果的话）
   for (let i = startIndex; i < msg.skillPlan.length; i++) {
-    msg.skillPlan[i].status = 'pending'
-    msg.skillPlan[i].output = undefined
-    msg.skillPlan[i].outputFile = undefined
+    const s = msg.skillPlan[i]
+    if (s.status === 'completed' || s.status === 'error') {
+      if (s.output || s.outputFile) {
+        if (!s.outputHistory) s.outputHistory = []
+        s.outputHistory.push({
+          id: Date.now() + i,
+          timestamp: new Date(),
+          output: s.output,
+          outputFile: s.outputFile ? { ...s.outputFile } : undefined,
+          userInput: s.userInput
+        })
+      }
+    }
+    // 重置状态：当前配置的设为 configuring，后续的设为 pending
+    if (i === startIndex) {
+      s.status = 'configuring'
+    } else {
+      s.status = 'pending'
+    }
+    s.output = undefined
+    s.outputFile = undefined
   }
 
   // 保存待执行状态
@@ -1109,6 +1168,57 @@ const openSkillForRerun = (messageId: number, stepId: number) => {
     messageId,
     step.id
   )
+}
+
+// 暂停时打开配置侧边栏（可编辑后继续执行）
+const openPausedSkillConfig = (messageId: number, step: SkillStep) => {
+  // 将当前 running 的 skill 设为 configuring
+  step.status = 'configuring'
+
+  // 保存待执行状态
+  const msg = messages.value.find(m => m.id === messageId)
+  if (msg?.skillPlan) {
+    pendingExecution.value = {
+      messageId,
+      skills: msg.skillPlan
+    }
+  }
+
+  // 设置 executingStepInfo 并标记来自暂停状态
+  executingStepInfo.value = { messageId, stepId: step.id, fromPaused: true }
+
+  // 打开侧边栏配置（不用调用 openSkillExecution，直接设置状态）
+  executingSkill.value = { name: step.skillName, icon: step.skillIcon, description: step.description }
+  executionContext.value = lastUserQuery.value
+  skillPanelMessages.value = []
+  skillPanelInput.value = ''
+  skillPanelProcessing.value = false
+  skillPanelComplete.value = false
+  skillPanelParams.value = {}
+  showSkillExecution.value = true
+
+  // 生成初始问候消息
+  nextTick(() => {
+    const greeting = `正在编辑 **${step.skillName}** 的配置\n\n当前任务：${step.description}\n\n请输入新的要求或修改，确认后将继续执行。`
+    skillPanelMessages.value.push({
+      id: 1,
+      role: 'assistant',
+      content: greeting,
+      timestamp: new Date()
+    })
+    skillPanelInputRef.value?.focus()
+  })
+}
+
+// 删除单个历史结果
+const deleteHistoryItem = (messageId: number, stepId: number, historyId: number) => {
+  const msg = messages.value.find(m => m.id === messageId)
+  if (!msg?.skillPlan) return
+
+  const step = msg.skillPlan.find(s => s.id === stepId)
+  if (!step?.outputHistory) return
+
+  step.outputHistory = step.outputHistory.filter(h => h.id !== historyId)
 }
 
 // 按拓扑层级分组（用于单个流程组的渲染）
@@ -2897,11 +3007,11 @@ const openOutputFile = async (file: OutputFile) => {
                     <div
                       class="step-node"
                       :class="{
-                        'clickable': !isPipelineRunning(message.id) && step.status !== 'running',
-                        'disabled': isPipelineRunning(message.id)
+                        'clickable': (!isPipelineRunning(message.id) || isPaused) && step.status !== 'running' && step.status !== 'configuring',
+                        'disabled': isPipelineRunning(message.id) && !isPaused
                       }"
-                      @click="!isPipelineRunning(message.id) && step.status !== 'running' && openSkillForRerun(message.id, step.id)"
-                      :title="isPipelineRunning(message.id) ? '流程运行中，请等待完成' : '点击配置并重新执行'"
+                      @click="((!isPipelineRunning(message.id) || isPaused) && step.status !== 'running' && step.status !== 'configuring') && openSkillForRerun(message.id, step.id)"
+                      :title="isPipelineRunning(message.id) && !isPaused ? '流程运行中，请等待完成或暂停' : '点击配置并重新执行'"
                     >
                       <div class="step-number">{{ index + 1 }}</div>
                       <div class="step-icon">{{ step.skillIcon }}</div>
@@ -2913,22 +3023,49 @@ const openOutputFile = async (file: OutputFile) => {
                         </div>
                       </div>
                       <div class="step-status">
+                        <!-- 配置中 -->
+                        <span v-if="step.status === 'configuring'" class="status-badge configuring">
+                          <span class="config-pulse"></span>
+                          配置中...
+                        </span>
                         <!-- 等待中 -->
-                        <span v-if="step.status === 'pending'" class="status-badge pending">
+                        <span v-else-if="step.status === 'pending'" class="status-badge pending">
                           等待中
                         </span>
-                        <span
-                          v-else-if="step.status === 'running'"
-                          class="status-badge running pausable"
-                          :class="{ 'is-paused': isPaused }"
-                          @click.stop="togglePauseExecution(message.id)"
-                          :title="isPaused ? '点击继续执行' : '点击暂停执行'"
-                        >
-                          <span v-if="isPaused" class="pause-icon">▶</span>
-                          <span v-else class="spinner"></span>
-                          {{ isPaused ? '已暂停' : '执行中' }}
+                        <!-- 运行中/已暂停 -->
+                        <div v-else-if="step.status === 'running'" class="running-actions">
+                          <span
+                            class="status-badge running pausable"
+                            :class="{ 'is-paused': isPaused }"
+                            @click.stop="togglePauseExecution(message.id)"
+                            :title="isPaused ? '点击继续执行' : '点击暂停'"
+                          >
+                            <span v-if="isPaused" class="pause-icon">▶</span>
+                            <span v-else class="spinner"></span>
+                            {{ isPaused ? '已暂停' : '执行中' }}
+                          </span>
+                          <!-- 暂停时显示编辑按钮 -->
+                          <button
+                            v-if="isPaused"
+                            class="paused-edit-btn"
+                            @click.stop="openPausedSkillConfig(message.id, step)"
+                            title="编辑配置后继续执行"
+                          >
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                            </svg>
+                            编辑
+                          </button>
+                        </div>
+                        <span v-else-if="step.status === 'completed'" class="status-badge completed rerunnable">
+                          <span class="completed-text">已完成</span>
+                          <span class="rerun-text">重跑</span>
+                          <svg class="rerun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M1 4v6h6"/>
+                            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+                          </svg>
                         </span>
-                        <span v-else-if="step.status === 'completed'" class="status-badge completed">已完成</span>
                         <span v-else-if="step.status === 'missing'" class="step-missing-actions">
                           <span class="status-badge missing">未安装</span>
                           <button class="mini-action-btn create-btn" @click.stop="gotoAddSkill(step.skillName, 'create')">
@@ -2961,32 +3098,54 @@ const openOutputFile = async (file: OutputFile) => {
                         </svg>
                       </button>
                     </div>
-                    <!-- 输出信息 -->
-                    <div v-if="step.status === 'completed'" class="step-output-area">
-                      <span v-if="step.output && !step.outputFile" class="step-output-text">
-                        {{ step.output }}
-                      </span>
-                      <!-- 输出文件链接 -->
-                      <button
-                        v-if="step.outputFile"
-                        class="output-file-link"
-                        :style="{ '--file-color': getFileTypeInfo(step.outputFile.type).color }"
-                        @click.stop="openOutputFile(step.outputFile)"
-                      >
-                        <span class="file-icon">{{ getFileTypeInfo(step.outputFile.type).icon }}</span>
-                        <span class="file-info">
-                          <span class="file-name">{{ step.outputFile.name }}</span>
-                          <span class="file-meta">
-                            {{ getFileTypeInfo(step.outputFile.type).label }}
-                            <span v-if="step.outputFile.size"> · {{ step.outputFile.size }}</span>
-                          </span>
+                    <!-- 输出信息（当前结果 + 历史结果） -->
+                    <div v-if="step.status === 'completed' || step.outputHistory?.length" class="step-output-area">
+                      <!-- 所有结果（历史 + 当前）排成一排 -->
+                      <div class="output-files-row">
+                        <!-- 历史结果 -->
+                        <div
+                          v-for="hist in (step.outputHistory || [])"
+                          :key="hist.id"
+                          class="output-file-item history"
+                        >
+                          <button
+                            v-if="hist.outputFile"
+                            class="output-file-link-mini"
+                            :style="{ '--file-color': getFileTypeInfo(hist.outputFile.type).color }"
+                            @click.stop="openOutputFile(hist.outputFile)"
+                            :title="hist.outputFile.name"
+                          >
+                            <span class="file-icon">{{ getFileTypeInfo(hist.outputFile.type).icon }}</span>
+                            <span class="file-name">{{ hist.outputFile.name.length > 12 ? hist.outputFile.name.slice(0, 10) + '...' : hist.outputFile.name }}</span>
+                          </button>
+                          <span v-else-if="hist.output" class="history-text-mini">{{ hist.output.slice(0, 15) }}...</span>
+                          <button
+                            v-if="!isPipelineRunning(message.id) || step.status === 'configuring'"
+                            class="file-delete-btn"
+                            @click.stop="deleteHistoryItem(message.id, step.id, hist.id)"
+                            title="删除"
+                          >×</button>
+                        </div>
+                        <!-- 当前结果 -->
+                        <div
+                          v-if="step.status === 'completed' && step.outputFile"
+                          class="output-file-item current"
+                        >
+                          <button
+                            class="output-file-link-mini current"
+                            :style="{ '--file-color': getFileTypeInfo(step.outputFile.type).color }"
+                            @click.stop="openOutputFile(step.outputFile)"
+                            :title="step.outputFile.name"
+                          >
+                            <span class="file-icon">{{ getFileTypeInfo(step.outputFile.type).icon }}</span>
+                            <span class="file-name">{{ step.outputFile.name.length > 12 ? step.outputFile.name.slice(0, 10) + '...' : step.outputFile.name }}</span>
+                            <span class="current-tag">新</span>
+                          </button>
+                        </div>
+                        <span v-if="step.status === 'completed' && step.output && !step.outputFile" class="step-output-text-mini">
+                          {{ step.output }}
                         </span>
-                        <svg class="file-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                          <polyline points="15 3 21 3 21 9"/>
-                          <line x1="10" y1="14" x2="21" y2="3"/>
-                        </svg>
-                      </button>
+                      </div>
                     </div>
                     <!-- 执行结果（包括不符合预期的情况） -->
                     <div v-if="step.status === 'error'" class="step-result-area">
@@ -3225,7 +3384,7 @@ const openOutputFile = async (file: OutputFile) => {
                 </Transition>
               </div>
             </div>
-            <button class="panel-close-btn" @click="closeSkillExecution" title="关闭">
+            <button class="panel-close-btn" @click="closeSkillExecution(true)" title="关闭">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M18 6L6 18M6 6l12 12"/>
               </svg>
@@ -4896,40 +5055,43 @@ const openOutputFile = async (file: OutputFile) => {
 
 .step-tooltip {
   position: absolute;
-  left: 0;
-  top: 100%;
-  margin-top: 4px;
-  padding: 6px 10px;
+  left: 50%;
+  bottom: 100%;
+  margin-bottom: 8px;
+  padding: 8px 12px;
   background: #1e293b;
   color: #f1f5f9;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.4;
   border-radius: 6px;
-  max-width: 200px;
+  max-width: 280px;
   width: max-content;
-  z-index: 100;
+  z-index: 99999;
   opacity: 0;
   visibility: hidden;
-  transform: translateY(-4px);
+  transform: translateX(-50%) translateY(4px);
   transition: all 0.15s ease;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
   pointer-events: none;
+  white-space: normal;
+  word-break: break-word;
 }
 
-.step-tooltip::before {
+.step-tooltip::after {
   content: '';
   position: absolute;
-  top: -4px;
-  left: 12px;
-  border: 4px solid transparent;
-  border-bottom-color: #1e293b;
-  border-top: none;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: #1e293b;
+  border-bottom: none;
 }
 
 .step-desc-wrapper:hover .step-tooltip {
   opacity: 1;
   visibility: visible;
-  transform: translateY(0);
+  transform: translateX(-50%) translateY(0);
 }
 
 .step-status {
@@ -4981,14 +5143,215 @@ const openOutputFile = async (file: OutputFile) => {
   margin-right: 2px;
 }
 
+/* 运行中/暂停时的操作区 */
+.running-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.paused-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  font-size: 10px;
+  background: rgba(99, 102, 241, 0.1);
+  color: #6366f1;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.paused-edit-btn:hover {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: #6366f1;
+}
+
+.paused-edit-btn svg {
+  width: 10px;
+  height: 10px;
+}
+
 @keyframes pulse-pause {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.7; }
 }
 
+.status-badge.configuring {
+  background: rgba(99, 102, 241, 0.15);
+  color: #6366f1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.config-pulse {
+  width: 8px;
+  height: 8px;
+  background: #6366f1;
+  border-radius: 50%;
+  animation: configPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes configPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
 .status-badge.completed {
   background: rgba(16, 185, 129, 0.1);
   color: #10b981;
+}
+
+.status-badge.completed.rerunnable {
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.status-badge.completed .completed-text {
+  display: inline;
+}
+
+.status-badge.completed .rerun-text {
+  display: none;
+}
+
+.status-badge.completed .rerun-icon {
+  width: 12px;
+  height: 12px;
+  margin-left: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.step-node:hover .status-badge.completed.rerunnable {
+  background: rgba(99, 102, 241, 0.15);
+  color: #6366f1;
+}
+
+.step-node:hover .status-badge.completed .completed-text {
+  display: none;
+}
+
+.step-node:hover .status-badge.completed .rerun-text {
+  display: inline;
+}
+
+.step-node:hover .status-badge.completed .rerun-icon {
+  opacity: 1;
+}
+
+/* 文件一排显示样式 */
+.output-files-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.output-file-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.output-file-link-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 6px;
+  font-size: 11px;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+}
+
+.output-file-link-mini:hover {
+  background: rgba(var(--file-color-rgb, 99, 102, 241), 0.1);
+  border-color: var(--file-color, #6366f1);
+  color: var(--file-color, #6366f1);
+}
+
+.output-file-link-mini .file-icon {
+  font-size: 12px;
+}
+
+.output-file-link-mini .file-name {
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.output-file-link-mini.current {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.3);
+  color: #10b981;
+}
+
+.current-tag {
+  font-size: 9px;
+  padding: 1px 4px;
+  background: #10b981;
+  color: white;
+  border-radius: 3px;
+  margin-left: 2px;
+}
+
+.output-file-item.history .output-file-link-mini {
+  opacity: 0.75;
+}
+
+.output-file-item.history:hover .output-file-link-mini {
+  opacity: 1;
+}
+
+.file-delete-btn {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  background: #ef4444;
+  color: white;
+  border-radius: 50%;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.output-file-item:hover .file-delete-btn {
+  opacity: 1;
+}
+
+.file-delete-btn:hover {
+  background: #dc2626;
+}
+
+.history-text-mini {
+  font-size: 10px;
+  color: #94a3b8;
+  padding: 3px 6px;
+  background: rgba(148, 163, 184, 0.1);
+  border-radius: 4px;
+}
+
+.step-output-text-mini {
+  font-size: 11px;
+  color: #64748b;
 }
 
 .status-badge.error {

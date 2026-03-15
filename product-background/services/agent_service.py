@@ -295,14 +295,22 @@ If no suitable skills are found, return an empty plan with an explanation."""
             traceback.print_exc()
             return False, None, f"Failed to read script: {e}", None
 
+        # 检测代码类型：是否有 main(params) 函数
+        has_main_func = "def main(params)" in code or "def main(params:" in code
+
+        # 如果没有 main(params)，动态添加包装
+        if not has_main_func:
+            print(f"[Skill Execute] No main(params) found, auto-wrapping code...")
+            code = self._wrap_code_with_main(code, skill.name)
+            has_main_func = True
+
+        print(f"[Skill Execute] Code analysis: has_main_func={has_main_func}")
+
         # Capture stdout
         old_stdout = sys.stdout
         old_stderr = sys.stderr
         sys.stdout = StringIO()
         sys.stderr = StringIO()
-
-        # 调试：打印接收到的参数
-        print(f"[Skill Execute] Received params: {params}")
 
         try:
             # Create execution context with params and utilities
@@ -326,7 +334,18 @@ If no suitable skills are found, return an empty plan with an explanation."""
             _sys.path.insert(0, str(skill_folder))
 
             try:
+                # 先加载代码定义
                 exec(code, exec_globals)
+
+                # 调用 main(params) 函数
+                if "main" in exec_globals and callable(exec_globals["main"]):
+                    print(f"[Skill Execute] Calling main(params)...")
+                    result = exec_globals["main"](params or {})
+                    exec_globals["result"] = result
+                    print(f"[Skill Execute] main() returned: {type(result)}")
+                else:
+                    print(f"[Skill Execute] ERROR: No main function found after wrapping!")
+
             finally:
                 # 恢复 Python 路径
                 if str(skill_folder) in _sys.path:
@@ -336,6 +355,36 @@ If no suitable skills are found, return an empty plan with an explanation."""
             stderr_output = sys.stderr.getvalue()
             result = exec_globals.get("result", None)
 
+            # 后处理：如果结果是文件路径字符串，转换为标准格式
+            if isinstance(result, str) and result:
+                result_path = Path(result)
+                if result_path.exists() and result_path.is_file():
+                    print(f"[Skill Execute] Result is a file path: {result}")
+                    # 读取文件内容作为 output，并设置 _output_file 标记
+                    try:
+                        file_content = result_path.read_text(encoding='utf-8')
+                        suffix = result_path.suffix.lower()
+                        file_type = {
+                            '.json': 'json',
+                            '.html': 'html',
+                            '.htm': 'html',
+                            '.csv': 'csv',
+                            '.txt': 'txt',
+                            '.md': 'markdown'
+                        }.get(suffix, 'txt')
+                        result = {
+                            '_output_file': {
+                                'path': str(result_path),
+                                'type': file_type,
+                                'name': result_path.name
+                            },
+                            'content': file_content,
+                            'message': f"文件已生成: {result_path.name}"
+                        }
+                        output = file_content  # 使用文件内容作为输出
+                    except Exception as e:
+                        print(f"[Skill Execute] Failed to read result file: {e}")
+
             # 恢复标准输出后打印日志
             sys.stdout = old_stdout
             sys.stderr = old_stderr
@@ -344,7 +393,7 @@ If no suitable skills are found, return an empty plan with an explanation."""
                 print(f"[Skill Execute] Output:\n{output[:500]}{'...' if len(output) > 500 else ''}")
             if stderr_output:
                 print(f"[Skill Execute] Stderr:\n{stderr_output[:500]}")
-            print(f"[Skill Execute] Result type: {type(result)}")
+            print(f"[Skill Execute] Result type: {type(result)}, value: {str(result)[:200] if result else None}")
 
             return True, result, None, output
         except Exception as e:
@@ -416,6 +465,33 @@ If no suitable skills are found, return an empty plan with an explanation."""
             skill_description = params.get("skillDescription", "") if params else ""
             user_input = context or skill_description or skill.description or ""
 
+            # 获取上传的文件
+            file_paths = params.get("file_paths", []) if params else []
+            file_path = params.get("file_path", "") if params else ""
+            if file_path and file_path not in file_paths:
+                file_paths.append(file_path)
+
+            # 读取上传文件的内容
+            file_content = ""
+            if file_paths:
+                file_content = self._read_files_for_ai(file_paths)
+                if file_content:
+                    print(f"[AI Skill] Read file content, length: {len(file_content)}")
+
+            # 检测期望的输出格式
+            combined_text = f"{skill.name} {skill.description or ''} {user_input} {skill_md_content[:500]}".lower()
+            output_format_hint = ""
+            if "json" in combined_text:
+                output_format_hint = "用户需要 JSON 格式输出，请直接输出有效的 JSON 数据（不要用 markdown 代码块包裹）。"
+            elif "excel" in combined_text or "xlsx" in combined_text or "表格" in combined_text:
+                output_format_hint = "用户需要表格数据，请输出 JSON 数组格式的数据，每个元素是一行记录。"
+            elif "csv" in combined_text:
+                output_format_hint = "用户需要 CSV 格式，请输出 CSV 格式的文本数据。"
+            elif any(kw in combined_text for kw in ["html", "网页", "页面", "可视化"]):
+                output_format_hint = "用户需要 HTML 格式，请生成完整的 HTML 页面。"
+            else:
+                output_format_hint = "根据任务性质选择最合适的输出格式。"
+
             # 构建 prompt
             system_prompt = f"""你是一个专业的 AI 助手，正在执行名为「{skill.name}」的技能。
 
@@ -431,18 +507,25 @@ If no suitable skills are found, return an empty plan with an explanation."""
 - 如果是设计相关技能，生成详细的设计方案
 
 ## 输出格式
+{output_format_hint}
 直接输出结果内容，不需要额外的解释或 markdown 代码块包装（除非内容本身需要）。
 """
+
+            # 构建用户消息，包含文件内容
+            user_message = user_input or "请根据技能说明执行默认任务"
+            if file_content:
+                user_message = f"{user_message}\n\n## 用户上传的文件数据\n{file_content}"
 
             # 调用 Claude API
             print(f"[AI Skill] Executing skill '{skill.name}' with AI...")
             print(f"[AI Skill] User input: {user_input[:200]}...")
+            print(f"[AI Skill] File paths: {file_paths}")
 
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=16000,
                 system=system_prompt,
-                messages=[{"role": "user", "content": user_input or "请根据技能说明执行默认任务"}]
+                messages=[{"role": "user", "content": user_message}]
             )
 
             ai_output = response.content[0].text
@@ -491,9 +574,37 @@ If no suitable skills are found, return an empty plan with an explanation."""
             skill_description = params.get("skillDescription", "") if params else ""
             user_input = context or skill_description or ""
 
+            # 获取上传的文件
+            file_paths = params.get("file_paths", []) if params else []
+            file_path = params.get("file_path", "") if params else ""
+            if file_path and file_path not in file_paths:
+                file_paths.append(file_path)
+
             print(f"[AI Fallback] Executing skill '{skill.name}' with AI")
             print(f"[AI Fallback] Skill description: {skill.description}")
             print(f"[AI Fallback] User input: {user_input[:200]}...")
+            print(f"[AI Fallback] File paths: {file_paths}")
+
+            # 读取上传文件的内容
+            file_content = ""
+            if file_paths:
+                file_content = self._read_files_for_ai(file_paths)
+                if file_content:
+                    print(f"[AI Fallback] Read file content, length: {len(file_content)}")
+
+            # 检测期望的输出格式
+            combined_text = f"{skill.name} {skill.description or ''} {user_input}".lower()
+            output_format_hint = ""
+            if "json" in combined_text:
+                output_format_hint = "用户需要 JSON 格式输出，请直接输出有效的 JSON 数据（不要用 markdown 代码块包裹）。"
+            elif "excel" in combined_text or "xlsx" in combined_text or "表格" in combined_text:
+                output_format_hint = "用户需要表格数据，请输出 JSON 数组格式的数据，每个元素是一行记录。"
+            elif "csv" in combined_text:
+                output_format_hint = "用户需要 CSV 格式，请输出 CSV 格式的文本数据。"
+            elif any(kw in combined_text for kw in ["html", "网页", "页面", "可视化", "报告"]):
+                output_format_hint = "用户需要 HTML 格式，请生成完整的 HTML 页面。"
+            else:
+                output_format_hint = "根据任务性质选择最合适的输出格式（JSON、文本或结构化数据）。"
 
             # 构建 prompt
             system_prompt = f"""你是一个专业的 AI 助手，正在执行名为「{skill.name}」的任务。
@@ -503,21 +614,27 @@ If no suitable skills are found, return an empty plan with an explanation."""
 
 ## 任务要求
 根据用户需求，生成高质量的输出。
+- 如果任务涉及数据处理，请处理提供的数据并输出结果
 - 如果任务涉及数据分析，提供详细的分析结果
 - 如果任务涉及代码生成，生成完整可运行的代码
 - 如果任务涉及文档撰写，生成专业的文档内容
 
 ## 输出格式
-直接输出结果内容，不需要额外的解释。
-如果适合生成 HTML 页面（如报告、可视化），请生成完整的 HTML。
+{output_format_hint}
+直接输出结果内容，不需要额外的解释或说明文字。
 """
+
+            # 构建用户消息，包含文件内容
+            user_message = user_input or f"请执行「{skill.name}」任务"
+            if file_content:
+                user_message = f"{user_message}\n\n## 用户上传的文件数据\n{file_content}"
 
             # 调用 Claude API
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=16000,
                 system=system_prompt,
-                messages=[{"role": "user", "content": user_input or f"请执行「{skill.name}」任务"}]
+                messages=[{"role": "user", "content": user_message}]
             )
 
             ai_output = response.content[0].text
@@ -546,6 +663,188 @@ If no suitable skills are found, return an empty plan with an explanation."""
             traceback.print_exc()
             print(f"{'!'*60}\n")
             return False, None, f"AI fallback execution failed: {str(e)}", None
+
+    def _wrap_code_with_main(self, code: str, skill_name: str) -> str:
+        """
+        为没有 main(params) 的代码自动添加包装
+        """
+        import re
+
+        # 查找所有定义的函数
+        func_pattern = r'def\s+(\w+)\s*\([^)]*\)'
+        all_funcs = re.findall(func_pattern, code)
+        print(f"[CodeWrap] Found functions: {all_funcs}")
+
+        # 排除辅助函数
+        exclude_funcs = {'convert_value', 'helper', 'utils', '__init__', 'setup', 'init'}
+
+        candidates = []
+        for func_name in all_funcs:
+            if func_name.startswith('_') or func_name in exclude_funcs:
+                continue
+
+            score = 0
+            func_lower = func_name.lower()
+
+            # 优先级评分
+            if 'excel' in func_lower and 'json' in func_lower:
+                score = 100
+            elif '_to_' in func_lower:
+                score = 90
+            elif any(kw in func_lower for kw in ['convert', 'transform', 'process', 'parse', 'export']):
+                score = 80
+            elif any(kw in func_lower for kw in ['excel', 'csv', 'json', 'pdf', 'xml']):
+                score = 70
+            elif func_lower in ('main', 'run', 'execute'):
+                score = 50
+            elif any(kw in func_lower for kw in ['read', 'write', 'load', 'save', 'get', 'create']):
+                score = 40
+            else:
+                score = 10
+
+            candidates.append((score, func_name))
+
+        if not candidates:
+            print(f"[CodeWrap] No suitable function found")
+            return code
+
+        candidates.sort(reverse=True)
+        print(f"[CodeWrap] Candidates: {candidates}")
+        main_func_name = candidates[0][1]
+        print(f"[CodeWrap] Selected: {main_func_name}")
+
+        # 生成包装代码 - 使用 _output_file 以匹配系统的检测逻辑
+        wrapper = f'''
+
+# ========== 自动生成的 API 包装 ==========
+def main(params):
+    import json
+    files = params.get('files', [])
+    file_path = params.get('file_path', '')
+
+    print(f"[AutoWrapper] params: {{params}}")
+    print(f"[AutoWrapper] files: {{files}}, file_path: {{file_path}}")
+
+    if files:
+        input_file = files[0]
+    elif file_path:
+        input_file = file_path
+    else:
+        return {{'status': 'error', 'message': '请上传文件'}}
+
+    print(f"[AutoWrapper] Calling {main_func_name} with: {{input_file}}")
+
+    try:
+        result = {main_func_name}(input_file)
+        print(f"[AutoWrapper] Result type: {{type(result)}}, value: {{str(result)[:200]}}")
+
+        if isinstance(result, str):
+            try:
+                json.loads(result)
+                output_path = OUTPUTS_DIR / generate_unique_filename('output', 'json')
+                output_path.write_text(result, encoding='utf-8')
+                return {{
+                    'status': 'success',
+                    'message': '转换完成',
+                    'content': result,
+                    '_output_file': {{'path': str(output_path), 'type': 'json', 'name': output_path.name, 'url': f'/outputs/{{output_path.name}}'}}
+                }}
+            except json.JSONDecodeError:
+                return {{'status': 'success', 'message': result, 'content': result}}
+        elif isinstance(result, (dict, list)):
+            json_str = json.dumps(result, ensure_ascii=False, indent=2)
+            output_path = OUTPUTS_DIR / generate_unique_filename('output', 'json')
+            output_path.write_text(json_str, encoding='utf-8')
+            return {{
+                'status': 'success',
+                'message': '处理完成',
+                'content': result,
+                '_output_file': {{'path': str(output_path), 'type': 'json', 'name': output_path.name, 'url': f'/outputs/{{output_path.name}}'}}
+            }}
+        else:
+            return {{'status': 'success', 'message': str(result), 'content': str(result)}}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {{'status': 'error', 'message': str(e)}}
+'''
+        return code + wrapper
+
+    def _read_files_for_ai(self, file_paths: list) -> str:
+        """
+        读取上传的文件内容，转换为 AI 可以处理的文本格式
+        """
+        contents = []
+
+        for file_path in file_paths:
+            try:
+                path = Path(file_path)
+                if not path.exists():
+                    print(f"[AI Fallback] File not found: {file_path}")
+                    continue
+
+                suffix = path.suffix.lower()
+
+                # Excel 文件
+                if suffix in ['.xlsx', '.xls']:
+                    try:
+                        df = pd.read_excel(file_path)
+                        # 限制行数避免 token 过多
+                        if len(df) > 500:
+                            df = df.head(500)
+                            contents.append(f"### {path.name} (前500行)\n```\n{df.to_string()}\n```")
+                        else:
+                            contents.append(f"### {path.name}\n```\n{df.to_string()}\n```")
+                        print(f"[AI Fallback] Read Excel: {path.name}, rows: {len(df)}")
+                    except Exception as e:
+                        print(f"[AI Fallback] Failed to read Excel {path.name}: {e}")
+
+                # CSV 文件
+                elif suffix == '.csv':
+                    try:
+                        df = pd.read_csv(file_path)
+                        if len(df) > 500:
+                            df = df.head(500)
+                            contents.append(f"### {path.name} (前500行)\n```\n{df.to_string()}\n```")
+                        else:
+                            contents.append(f"### {path.name}\n```\n{df.to_string()}\n```")
+                        print(f"[AI Fallback] Read CSV: {path.name}, rows: {len(df)}")
+                    except Exception as e:
+                        print(f"[AI Fallback] Failed to read CSV {path.name}: {e}")
+
+                # JSON 文件
+                elif suffix == '.json':
+                    try:
+                        import json
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        json_str = json.dumps(data, ensure_ascii=False, indent=2)
+                        if len(json_str) > 10000:
+                            json_str = json_str[:10000] + "\n...[truncated]..."
+                        contents.append(f"### {path.name}\n```json\n{json_str}\n```")
+                        print(f"[AI Fallback] Read JSON: {path.name}")
+                    except Exception as e:
+                        print(f"[AI Fallback] Failed to read JSON {path.name}: {e}")
+
+                # 文本文件
+                elif suffix in ['.txt', '.md', '.py', '.js', '.html', '.css']:
+                    try:
+                        text = path.read_text(encoding='utf-8')
+                        if len(text) > 10000:
+                            text = text[:10000] + "\n...[truncated]..."
+                        contents.append(f"### {path.name}\n```\n{text}\n```")
+                        print(f"[AI Fallback] Read text: {path.name}")
+                    except Exception as e:
+                        print(f"[AI Fallback] Failed to read text {path.name}: {e}")
+
+                else:
+                    print(f"[AI Fallback] Unsupported file type: {suffix}")
+                    contents.append(f"### {path.name}\n[不支持的文件类型: {suffix}]")
+
+            except Exception as e:
+                print(f"[AI Fallback] Error processing file {file_path}: {e}")
+
+        return "\n\n".join(contents)
 
     def execute_temp_skill(
         self,
@@ -618,9 +917,20 @@ If no suitable skills are found, return an empty plan with an explanation."""
             }
             exec_globals["__builtins__"] = __builtins__
 
+            # 检测代码类型
+            has_main_func = "def main(params)" in code or "def main(params:" in code
+            print(f"[Temp Skill Execute] has_main_func={has_main_func}")
+
             exec(code, exec_globals)
 
-            result = exec_globals.get("result")
+            # 如果有 main(params) 函数，调用它（与正式技能执行一致）
+            if has_main_func and "main" in exec_globals and callable(exec_globals["main"]):
+                print(f"[Temp Skill Execute] Calling main(params)...")
+                result = exec_globals["main"](params or {})
+                exec_globals["result"] = result
+            else:
+                result = exec_globals.get("result")
+
             stdout_output = sys.stdout.getvalue()
 
             return True, result, None, stdout_output
@@ -652,6 +962,27 @@ If no suitable skills are found, return an empty plan with an explanation."""
             context = params.get("context", "") if params else ""
             user_input = context or params.get("input", "") if params else ""
 
+            # 获取上传的文件
+            file_paths = params.get("file_paths", []) if params else []
+            file_path = params.get("file_path", "") if params else ""
+            if file_path and file_path not in file_paths:
+                file_paths.append(file_path)
+
+            # 读取上传文件的内容
+            file_content = ""
+            if file_paths:
+                file_content = self._read_files_for_ai(file_paths)
+                if file_content:
+                    print(f"[AI Temp Skill] Read file content, length: {len(file_content)}")
+
+            # 检测期望的输出格式
+            combined_text = f"{skill_name} {skill_md_content[:500]} {user_input}".lower()
+            output_format_hint = ""
+            if "json" in combined_text:
+                output_format_hint = "用户需要 JSON 格式输出，请直接输出有效的 JSON 数据。"
+            elif "excel" in combined_text or "xlsx" in combined_text:
+                output_format_hint = "请输出 JSON 数组格式的数据。"
+
             system_prompt = f"""你是一个专业的 AI 助手，正在测试名为「{skill_name}」的技能。
 
 ## 技能说明
@@ -659,16 +990,22 @@ If no suitable skills are found, return an empty plan with an explanation."""
 
 ## 任务要求
 根据技能说明和用户需求，生成高质量的输出。
+{output_format_hint}
 
 ## 输出格式
 直接输出结果内容。
 """
 
+            # 构建用户消息，包含文件内容
+            user_message = user_input or "请根据技能说明执行测试任务"
+            if file_content:
+                user_message = f"{user_message}\n\n## 用户上传的文件数据\n{file_content}"
+
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=16000,
                 system=system_prompt,
-                messages=[{"role": "user", "content": user_input or "请根据技能说明执行测试任务"}]
+                messages=[{"role": "user", "content": user_message}]
             )
 
             ai_output = response.content[0].text

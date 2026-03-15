@@ -110,6 +110,87 @@ const editingSkillInfo = ref<{
   tags: string[]
 } | null>(null)
 
+// ============================================================
+// 更新模式选择（覆盖/新版本）
+// ============================================================
+
+const showUpdateModeDialog = ref(false)
+const selectedUpdateMode = ref<'overwrite' | 'new_version'>('new_version')
+const pendingUpdateData = ref<{
+  skillId: string
+  code: string
+  skillName: string
+  description: string
+  icon: string
+} | null>(null)
+
+// 执行保存（根据选择的模式）
+const executeUpdate = async () => {
+  if (!pendingUpdateData.value) return
+
+  const { skillId, code, skillName, description, icon } = pendingUpdateData.value
+
+  try {
+    await skillsApi.update(skillId, {
+      code: code,
+      update_mode: selectedUpdateMode.value
+    })
+
+    showUpdateModeDialog.value = false
+    pendingUpdateData.value = null
+
+    const modeText = selectedUpdateMode.value === 'overwrite' ? '已覆盖更新' : '已创建新版本'
+
+    // 更新当前消息显示结果
+    if (currentGeneratingMsgId.value) {
+      const msgIndex = aiMessages.value.findIndex(m => m.id === currentGeneratingMsgId.value)
+      if (msgIndex !== -1) {
+        aiMessages.value[msgIndex] = {
+          ...aiMessages.value[msgIndex],
+          content: `✅ 技能「${skillName}」${modeText}`,
+          generating: false,
+          skillCard: {
+            type: 'saved',
+            name: skillName,
+            icon: icon,
+            description: description,
+            status: 'success',
+            details: [{ label: '状态', value: modeText }],
+            actions: []
+          }
+        }
+      }
+    }
+
+    // 关闭代码编辑器
+    showCodeEditor.value = false
+
+    // 通知父组件刷新
+    emit('submit', { updated: true, skillId })
+
+  } catch (error: any) {
+    console.error('[UpdateSkill] Error:', error)
+    showUpdateModeDialog.value = false
+
+    if (currentGeneratingMsgId.value) {
+      const msgIndex = aiMessages.value.findIndex(m => m.id === currentGeneratingMsgId.value)
+      if (msgIndex !== -1) {
+        aiMessages.value[msgIndex] = {
+          ...aiMessages.value[msgIndex],
+          content: `❌ 保存失败: ${error.message}`,
+          generating: false
+        }
+      }
+    }
+  }
+}
+
+// 取消更新
+const cancelUpdate = () => {
+  showUpdateModeDialog.value = false
+  pendingUpdateData.value = null
+}
+
 // 加载编辑模式下的技能代码
 const loadEditSkillCode = async () => {
   if (!props.editSkill) return
@@ -198,26 +279,21 @@ const saveManualCodeEdit = async (): Promise<ActionResult> => {
 
     // 如果是编辑现有技能（传入了 editSkill）
     if (props.editSkill) {
-      await skillsApi.update(props.editSkill.id, {
-        code: codeEditorContent.value
-      })
-
-      const savedCard: SkillSummaryCard = {
-        type: 'saved',
-        name: skillName,
-        icon: icon,
-        description: description,
-        status: 'success',
-        details: [{ label: '状态', value: '代码已更新' }],
-        actions: []
-      }
-
-      return {
-        response: '',
-        finalized: true,
+      // 显示更新模式选择对话框
+      pendingUpdateData.value = {
         skillId: props.editSkill.id,
+        code: codeEditorContent.value,
         skillName: skillName,
-        skillCard: savedCard
+        description: description,
+        icon: icon
+      }
+      selectedUpdateMode.value = 'new_version'  // 默认新版本
+      showUpdateModeDialog.value = true
+
+      // 返回空结果，等用户选择后再执行
+      return {
+        response: '请选择保存方式...',
+        pendingModeSelection: true
       }
     }
 
@@ -470,6 +546,7 @@ interface SkillSummaryCard {
 interface QuickAction {
   label: string
   action: string
+  data?: any  // 附带数据，用于 save-extracted-skill 等需要数据的操作
 }
 
 interface AiMessage {
@@ -724,6 +801,28 @@ const finalSkillName = ref<string | null>(null)
 // 是否等待测试决定（保存后）
 const awaitingTestDecision = ref(false)
 
+// 是否等待修改输入（用户点击了"修改"按钮）
+const awaitingModification = ref(false)
+
+// ============================================================
+// 新流程状态（简化版）
+// ============================================================
+
+// 流程阶段: idle -> creating -> preview -> testing -> saved
+type FlowPhase = 'idle' | 'creating' | 'preview' | 'testing' | 'saved'
+const flowPhase = ref<FlowPhase>('idle')
+
+// 当前技能信息（用于卡片展示）
+const currentSkillInfo = ref<{
+  name: string
+  description: string
+  icon: string
+  tags: string[]
+  code?: string
+  inputType?: string
+  outputType?: string
+} | null>(null)
+
 // 是否已有可测试的技能
 const hasTestableSkill = computed(() => !!tempSkillId.value || !!editingSkillId.value)
 
@@ -849,6 +948,7 @@ const initConversation = () => {
   tempSkillName.value = null
   editingSkillId.value = null
   finalSkillId.value = null
+  awaitingModification.value = false
   finalSkillName.value = null
   awaitingTestDecision.value = false
   uploadedFiles.value = []
@@ -874,8 +974,11 @@ const initConversation = () => {
   }]
 }
 
+// 存储待保存的提取技能数据
+const pendingExtractedSkill = ref<any>(null)
+
 // 处理卡片按钮点击
-const handleCardAction = async (action: string) => {
+const handleCardAction = async (action: string, data?: any) => {
   switch (action) {
     case 'test':
       // 添加提示消息并聚焦输入框
@@ -897,11 +1000,12 @@ const handleCardAction = async (action: string) => {
       handleUserInput('保存')
       break
     case 'modify':
-      // 修改技能
+      // 修改技能 - 设置等待修改状态
+      awaitingModification.value = true
       aiMessages.value.push({
         id: Date.now(),
         role: 'assistant',
-        content: '请告诉我需要修改什么？'
+        content: '请告诉我需要修改什么？（描述问题或直接说明需要的改动）'
       })
       scrollToBottom()
       break
@@ -972,6 +1076,77 @@ const handleCardAction = async (action: string) => {
       })
       scrollToBottom()
       break
+
+    case 'save-extracted-skill':
+      // 保存从 skill-creator 输出中提取的技能
+      await saveExtractedSkill(data || pendingExtractedSkill.value)
+      break
+
+    case 'continue':
+      // 继续优化，不需要特殊处理，用户可以继续输入
+      aiMessages.value.push({
+        id: Date.now(),
+        role: 'assistant',
+        content: '好的，请告诉我需要如何优化？'
+      })
+      scrollToBottom()
+      break
+  }
+}
+
+// 保存从 skill-creator 输出中提取的技能
+const saveExtractedSkill = async (skillData: any) => {
+  if (!skillData || !skillData.code) {
+    aiMessages.value.push({
+      id: Date.now(),
+      role: 'assistant',
+      content: '抱歉，没有找到可保存的技能代码。'
+    })
+    return
+  }
+
+  try {
+    const skillName = generateUniqueName(skillData.name || '新技能')
+
+    // 创建临时技能
+    const tempSkill = await skillsApi.createTemp({
+      name: skillName,
+      description: skillData.description || '',
+      icon: skillData.icon || '⚡',
+      code: skillData.code,
+      tags: skillData.tags || ['自动创建'],
+      output_config: skillData.output_type ? { preferred_type: skillData.output_type } : undefined
+    })
+
+    tempSkillId.value = tempSkill.temp_id
+    tempSkillName.value = skillName
+
+    // 显示成功卡片
+    aiMessages.value.push({
+      id: Date.now(),
+      role: 'assistant',
+      content: '',
+      skillCard: {
+        type: 'created',
+        name: skillName,
+        icon: skillData.icon || '⚡',
+        description: skillData.description || '',
+        status: 'success',
+        details: skillData.output_type ? [{ label: '输出', value: skillData.output_type }] : [],
+        actions: [
+          { label: '测试', action: 'test' },
+          { label: '保存', action: 'save' }
+        ]
+      }
+    })
+    scrollToBottom()
+  } catch (error: any) {
+    aiMessages.value.push({
+      id: Date.now(),
+      role: 'assistant',
+      content: `创建技能失败：${error.message}`
+    })
+    scrollToBottom()
   }
 }
 
@@ -1114,7 +1289,8 @@ const handleUserInput = async (input: string) => {
         generating: false,
         outputFile: action.outputFile,
         htmlPreview: action.htmlPreview,
-        skillCard: action.skillCard
+        skillCard: action.skillCard,
+        quickActions: action.quickActions
       }
     }
 
@@ -1194,6 +1370,8 @@ interface ActionResult {
   finalized?: boolean
   skillCard?: SkillSummaryCard
   showReturnOptions?: boolean
+  pendingModeSelection?: boolean  // 等待用户选择更新模式
+  quickActions?: QuickAction[]    // 快捷操作按钮
 }
 
 const analyzeAndAct = async (
@@ -1206,74 +1384,75 @@ const analyzeAndAct = async (
   const inputLower = input.toLowerCase().trim()
   const hasFiles = files.length > 0
 
-  // 检测用户意图 - 优先级从高到低
-  const wantsToSave = /保存|确认保存|正式创建|提交/.test(inputLower)
-  const wantsToRecreate = /重新创建|从头开始|重做/.test(inputLower)
-  const wantsToModify = /修改|改一下|不对|调整|更改|换一下/.test(inputLower) && !wantsToRecreate
-  const wantsToCancel = /取消|算了|不要了|关闭/.test(inputLower)
-  const wantsToTest = hasFiles || /测试|试试|运行|执行|试一下/.test(inputLower)
-  const wantsToConfirmCreate = /创建|完成|确认|就这样|好的|可以|行|ok|yes|是|对|嗯|没问题/.test(inputLower)
+  console.log('[AnalyzeAction] 流程阶段:', flowPhase.value, '输入:', inputLower)
 
-  console.log('[AnalyzeAction] 用户输入:', inputLower)
-  console.log('[AnalyzeAction] 意图检测 - 保存:', wantsToSave, '重建:', wantsToRecreate, '修改:', wantsToModify, '测试:', wantsToTest)
+  // ============================================================
+  // 简化流程：减少确认，直接行动
+  // ============================================================
 
-  // 1. 用户要取消
-  if (wantsToCancel) {
-    await cleanupTempSkill()
-    return {
-      response: '好的，已取消。如果之后想创建技能，随时告诉我。'
-    }
+  // 0. 等待修改输入
+  if (awaitingModification.value && (tempSkillId.value || editingSkillId.value)) {
+    awaitingModification.value = false
+    flowPhase.value = 'creating'
+    return await modifyExistingSkill(input, history)
   }
 
-  // 2. 用户要正式保存（已有临时技能）
+  // 意图检测
+  const wantsToSave = /保存|确认|提交|没问题|满意/.test(inputLower)
+  const wantsToRecreate = /重新创建|从头开始|重做|重新来/.test(inputLower)
+  const wantsToModify = /修改|改一下|不对|调整|更改|换一下|改改|有问题|错了|bug|优化/.test(inputLower) && !wantsToRecreate
+  const wantsToCancel = /取消|算了|不要了|关闭/.test(inputLower)
+  const wantsToTest = hasFiles || /测试|试试|运行|执行|试一下/.test(inputLower)
+
+  // 1. 取消
+  if (wantsToCancel) {
+    await cleanupTempSkill()
+    flowPhase.value = 'idle'
+    return { response: '好的，已取消。' }
+  }
+
+  // 2. 保存（已有临时技能）
   if (wantsToSave && tempSkillId.value) {
+    flowPhase.value = 'saved'
     return await finalizeSkill()
   }
 
-  // 3. 用户要重新创建（清除当前，重新开始）
+  // 3. 重新创建
   if (wantsToRecreate) {
     await cleanupTempSkill()
-    return {
-      response: '好的，让我们重新开始！\n\n请描述你想创建的技能：\n• 技能要做什么？\n• 输入是什么？（文件、文本等）\n• 输出是什么？'
-    }
+    flowPhase.value = 'idle'
+    return { response: '好的，请描述你想创建的技能。' }
   }
 
-  // 4. 用户要修改（临时技能或编辑中的永久技能）
-  const hasModifiableSkill = tempSkillId.value || editingSkillId.value
-  if (wantsToModify && hasModifiableSkill) {
-    // 检查上一条AI消息是否在询问确认修改
-    const lastAiMsg = history.filter(m => m.role === 'assistant').slice(-1)[0]
-    const aiAskingConfirm = lastAiMsg?.content.includes('确认修改') || lastAiMsg?.content.includes('更新技能')
-
-    // 如果 AI 正在等待确认，且用户说了肯定词
-    const isConfirming = /好的|可以|是|对|确认|更新|改吧/.test(inputLower)
-    if (aiAskingConfirm && isConfirming) {
-      // 用户确认修改，执行修改
-      return await modifyExistingSkill(input, history)
-    }
-    // 否则让 AI 理解修改需求
-    return await callAIForSkillCreation(input, filePaths, history, true)
+  // 4. 修改（有技能时）
+  if ((tempSkillId.value || editingSkillId.value) && wantsToModify) {
+    flowPhase.value = 'creating'
+    return await modifyExistingSkill(input, history)
   }
 
-  // 5. 用户要测试（已有技能且有输入/文件）
+  // 5. 测试（有技能且有文件/输入）
   const hasTestableSkillNow = tempSkillId.value || finalSkillId.value || editingSkillId.value
-  if (wantsToTest && hasTestableSkillNow && (hasFiles || input.trim())) {
+  if (hasTestableSkillNow && (hasFiles || (wantsToTest && input.trim()))) {
+    flowPhase.value = 'testing'
     return await executeSkillTest(input, filePaths)
   }
 
-  // 6. 用户确认创建（还没有临时技能）
-  if (wantsToConfirmCreate && !tempSkillId.value && history.length >= 2) {
-    return await createSkillFromHistory(history, input)
-  }
-
-  // 7. 有文件但没有技能，先提示创建（编辑模式除外）
+  // 6. 有文件但没有技能 - 提示
   if (hasFiles && !tempSkillId.value && !editingSkillId.value) {
     return {
-      response: `我收到了你上传的文件：${files.map(f => f.name).join(', ')}\n\n请先描述你想创建什么技能来处理这些文件？例如：\n• "分析 Excel 数据，生成统计报告"\n• "提取文件中的关键信息"\n• "将数据转换为其他格式"`
+      response: `收到文件：${files.map(f => f.name).join(', ')}\n\n请描述你想创建什么技能来处理这些文件？`
     }
   }
 
-  // 8. 默认：调用 AI 进行对话
+  // 7. 首次输入或继续对话 - 直接开始创建
+  // 关键改动：不再反复确认，直接开始
+  if (!tempSkillId.value && !editingSkillId.value && history.length <= 2) {
+    // 首次输入需求，直接开始创建
+    flowPhase.value = 'creating'
+    return await directCreateSkill(input, filePaths, history)
+  }
+
+  // 8. 其他情况：继续对话
   return await callAIForSkillCreation(input, filePaths, history, false)
 }
 
@@ -1318,73 +1497,86 @@ const callAIForSkillCreation = async (
 ): Promise<ActionResult> => {
 
   const fileInfo = filePaths.length > 0
-    ? `\n\n用户上传了文件：${filePaths.join(', ')}`
+    ? `[上传了文件：${filePaths.join(', ')}]`
     : ''
 
-  const contextInfo = tempSkillId.value
-    ? `\n\n[当前有一个临时技能 "${tempSkillName.value}" 正在测试中]`
-    : ''
-
-  const modifyHint = isModification
-    ? '\n\n用户希望修改之前的技能设计，请根据反馈重新设计。'
-    : ''
-
-  // 检测用户是否在确认创建
+  // 检测用户是否在确认创建 - 更严格的条件
   const inputLower = input.toLowerCase().trim()
-  const confirmWords = ['好的', '好', '可以', '行', '确认', '创建', '生成', '开始', 'ok', 'yes', '是', '对', '嗯', '没问题']
-  const isConfirmingCreation = confirmWords.some(word => inputLower.includes(word)) &&
-    history.length >= 2 &&  // 至少有一轮对话
-    !tempSkillId.value  // 还没创建技能
+  const confirmWords = ['好的', '好', '可以', '行', '确认', '创建', '生成', '开始', 'ok', 'yes', '是', '对', '嗯', '没问题', '创建吧']
+  const simpleConfirm = confirmWords.some(word => inputLower.includes(word))
+
+  // 检查 AI 是否明确询问过是否创建
+  const lastAiMsg = history.filter(m => m.role === 'assistant').slice(-1)[0]
+  const aiAskingToCreate = lastAiMsg?.content && /开始创建|确认创建|需求已明确/.test(lastAiMsg.content)
+
+  // 只有当：1.用户确认 2.AI明确询问过 3.还没有临时技能 4.有足够对话历史
+  const isConfirmingCreation = simpleConfirm && aiAskingToCreate &&
+    !tempSkillId.value && history.length >= 2
 
   // 如果用户确认创建，立即显示进度卡片并创建技能
   if (isConfirmingCreation) {
     return await createSkillFromHistory(history, input)
   }
 
-  // 普通对话流程
-  const isEditMode = !!editingSkillId.value
-  const statusInfo = editingSkillId.value
-    ? `正在编辑技能「${tempSkillName.value}」`
-    : tempSkillId.value
-      ? `已创建临时技能「${tempSkillName.value}」，正在测试中`
-      : '尚未创建技能'
-
-  const hasModifiableSkill = tempSkillId.value || editingSkillId.value
-
-  const systemHint = `你是一个专业的技能创建助手。
-
-## 当前状态
-${statusInfo}
-${contextInfo}${modifyHint}
-
-## 你的任务
-${hasModifiableSkill && isModification ? `
-用户想修改当前技能。请：
-1. 理解用户的修改需求
-2. 确认修改内容
-3. 询问"确认修改吗？我会更新技能代码"
-` : isEditMode ? `
-用户正在编辑现有技能。请：
-1. 理解用户想要的修改
-2. 确认修改内容
-3. 询问"确认修改吗？"
-` : `
-1. 理解用户需求，询问关键细节（输入格式、输出格式、处理逻辑）
-2. 当需求清晰后，总结并确认："需求已明确，开始创建吗？"
-3. 主动推进流程，不要等用户说太多
-`}
-
-## 回复风格
-- 简洁专业，使用 Markdown 格式
-- 用列表总结关键点
-- 适时使用 emoji 增加可读性
-- 如果用户上传了文件，说明你会基于这类文件设计技能`
+  // ============================================================
+  // 透传模式 + 环境适配
+  // 首次对话时添加环境上下文，后续保持纯透传
+  // ============================================================
 
   let fullContent = ''
 
   try {
+    let message = input
+    if (fileInfo) {
+      message = `${input}\n\n${fileInfo}`
+    }
+
+    // 首次对话时，添加 Web 环境上下文和代码格式要求
+    if (history.length === 0) {
+      message = `${message}
+
+[环境说明]
+这是 Web API 环境，不是命令行。生成代码时必须使用以下格式：
+
+\`\`\`python
+def main(params):
+    """
+    技能入口函数
+
+    params 包含:
+    - params.get('input', '') - 用户输入的文本
+    - params.get('files', []) - 上传的文件路径列表
+    - params.get('file_path', '') - 单个文件路径
+
+    可用工具:
+    - pd (pandas) - 数据处理
+    - Path - 路径操作
+    - OUTPUTS_DIR - 输出目录
+    - generate_unique_filename(ext) - 生成唯一文件名
+    """
+    files = params.get('files', [])
+
+    # 处理逻辑...
+
+    # 返回格式
+    return {
+        'status': 'success',  # 或 'error'
+        'message': '处理完成',
+        'output_file': {  # 可选，如果生成了文件
+            'path': str(output_path),
+            'type': 'json'  # json/xlsx/csv/html 等
+        }
+    }
+\`\`\`
+
+重要：
+- 不要用 argparse 或 if __name__ == "__main__"
+- 必须有 main(params) 函数作为入口
+- 文件路径从 params['files'] 获取，不是命令行参数`
+    }
+
     for await (const chunk of agentApi.chatStream({
-      message: `${systemHint}\n\n用户输入：${input}${fileInfo}`,
+      message: message,
       history: history,
       skill_ids: skillCreatorId.value ? [skillCreatorId.value] : undefined
     }, abortController.value?.signal)) {
@@ -1406,282 +1598,365 @@ ${hasModifiableSkill && isModification ? `
     throw new Error(`AI 服务出错: ${error.message}`)
   }
 
+  // UI 增强：检测是否输出了完整技能，显示保存按钮
+  const extractedSkill = tryExtractSkillFromResponse(fullContent, history)
+  if (extractedSkill && extractedSkill.code && !tempSkillId.value) {
+    // skill-creator 输出了代码，但我们还没有创建临时技能
+    // 返回响应并附带快速操作按钮
+    return {
+      response: fullContent,
+      quickActions: [
+        { label: '保存此技能', action: 'save-extracted-skill', data: extractedSkill },
+        { label: '继续优化', action: 'continue' }
+      ]
+    }
+  }
+
   return { response: fullContent }
 }
 
-// 根据对话历史创建技能 - 使用 skill-creator 生成更完整的技能
+// ============================================================
+// 调用 skill-creator 创建技能
+// ============================================================
+// 简化流程：直接创建技能（不反复确认）
+// ============================================================
+
+const directCreateSkill = async (
+  input: string,
+  filePaths: string[],
+  history: Array<{ role: 'user' | 'assistant', content: string }>
+): Promise<ActionResult> => {
+  console.log('[DirectCreate] 开始直接创建，输入:', input)
+
+  // 显示进度
+  showProgressInCurrentMessage()
+  startCreationProgress()
+  updateCreationStep('design')
+
+  try {
+    // 构建消息：直接告诉 AI 开始创建
+    const createMessage = history.length === 0
+      ? `${input}\n\n[环境说明]\n这是 Web API 环境。请直接开始创建技能，生成完整的代码。\n代码格式要求：def main(params): ...\n不需要反复确认，直接给出可用的代码。`
+      : input
+
+    let fullResponse = ''
+
+    for await (const chunk of agentApi.chatStream({
+      message: createMessage,
+      history: history,
+      skill_ids: skillCreatorId.value ? [skillCreatorId.value] : undefined
+    }, abortController.value?.signal)) {
+      fullResponse += chunk
+
+      // 流式更新
+      if (currentGeneratingMsgId.value) {
+        const msgIndex = aiMessages.value.findIndex(m => m.id === currentGeneratingMsgId.value)
+        if (msgIndex !== -1) {
+          aiMessages.value[msgIndex] = {
+            ...aiMessages.value[msgIndex],
+            content: fullResponse || '正在创建...'
+          }
+          scrollToBottom()
+        }
+      }
+    }
+
+    console.log('[DirectCreate] AI 返回，长度:', fullResponse.length)
+    updateCreationStep('generate')
+
+    // 尝试提取技能
+    const extractedConfig = tryExtractSkillFromResponse(fullResponse, history)
+
+    if (extractedConfig && extractedConfig.code) {
+      // 成功提取代码，创建临时技能
+      updateCreationStep('create')
+
+      const skillName = generateUniqueName(extractedConfig.name || generateSkillName(input))
+      const tempSkill = await skillsApi.createTemp({
+        name: skillName,
+        description: extractedConfig.description || input,
+        icon: extractedConfig.icon || '⚡',
+        code: extractedConfig.code,
+        tags: extractedConfig.tags || ['自动创建'],
+        output_config: extractedConfig.output_type ? { preferred_type: extractedConfig.output_type } : undefined
+      })
+
+      tempSkillId.value = tempSkill.temp_id
+      tempSkillName.value = skillName
+      flowPhase.value = 'preview'
+
+      // 保存当前技能信息
+      currentSkillInfo.value = {
+        name: skillName,
+        description: extractedConfig.description || input,
+        icon: extractedConfig.icon || '⚡',
+        tags: extractedConfig.tags || ['自动创建'],
+        code: extractedConfig.code,
+        inputType: extractedConfig.input_type,
+        outputType: extractedConfig.output_type
+      }
+
+      finishCreationProgress(true)
+      hideProgressInCurrentMessage()
+
+      // 返回预览卡片（简洁版）
+      return {
+        response: `✅ 技能创建完成！`,
+        skillCreated: true,
+        skillId: tempSkill.temp_id,
+        skillName: skillName,
+        skillCard: {
+          type: 'created',
+          name: skillName,
+          icon: extractedConfig.icon || '⚡',
+          description: extractedConfig.description || input,
+          status: 'success',
+          details: [
+            ...(extractedConfig.input_type ? [{ label: '输入', value: extractedConfig.input_type }] : []),
+            ...(extractedConfig.output_type ? [{ label: '输出', value: extractedConfig.output_type }] : [])
+          ],
+          actions: [
+            { label: '🧪 测试一下', action: 'test' },
+            { label: '💾 保存技能', action: 'save' },
+            { label: '✏️ 调整', action: 'modify' }
+          ]
+        }
+      }
+    }
+
+    // 未提取到代码，继续对话
+    finishCreationProgress(true)
+    hideProgressInCurrentMessage()
+    flowPhase.value = 'idle'
+
+    return { response: fullResponse }
+
+  } catch (error: any) {
+    console.error('[DirectCreate] 创建失败:', error)
+    finishCreationProgress(false)
+    hideProgressInCurrentMessage()
+    flowPhase.value = 'idle'
+
+    return {
+      response: `创建失败: ${error.message || '未知错误'}`,
+      skillCard: {
+        type: 'created',
+        name: '创建失败',
+        status: 'error',
+        description: error.message || '创建过程中出错',
+        actions: [{ label: '重试', action: 'recreate' }]
+      }
+    }
+  }
+}
+
+// ============================================================
+// 纯透传模式：前端只做 UI 展示，skill-creator 负责所有创建逻辑
+// ============================================================
+
 const createSkillFromHistory = async (
   history: Array<{ role: 'user' | 'assistant', content: string }>,
   confirmInput: string
 ): Promise<ActionResult> => {
-  // 立即显示进度卡片
+  // 显示进度（UI 增强）
   showProgressInCurrentMessage()
   startCreationProgress()
+  updateCreationStep('design')
 
   try {
-    // 第一步：分析需求
-    updateCreationStep('analyze')
-    console.log('[CreateSkill] 分析用户需求...')
+    // 纯透传：直接把确认消息发给 skill-creator
+    // skill-creator 会根据对话历史和用户确认来创建技能
+    console.log('[CreateSkill] 纯透传模式，发送确认消息到 skill-creator')
 
-    // 提取用户的核心需求
-    const userMessages = history.filter(m => m.role === 'user').map(m => m.content).join('\n')
-    const aiSummary = history.filter(m => m.role === 'assistant').slice(-1)[0]?.content || ''
-
-    await new Promise(r => setTimeout(r, 600))
-
-    // 第二步：设计方案 - 使用 skill-creator 生成详细设计
-    updateCreationStep('design')
-    console.log('[CreateSkill] 调用 skill-creator 设计技能方案...')
-
-    const designPrompt = `你是一个专业的技能设计师，需要根据用户需求设计一个完整的 Python 技能。
-
-## 用户需求
-${userMessages}
-
-## 对话摘要
-${aiSummary}
-
-## 设计要求
-请设计一个完整的技能，输出 JSON 格式的技能配置：
-
-\`\`\`json
-{
-  "name": "技能名称（英文小写，用横线连接，如 excel-analyzer）",
-  "description": "技能的简洁描述（一句话说明功能）",
-  "icon": "适合的 emoji 图标",
-  "tags": ["标签1", "标签2"],
-  "input_spec": {
-    "accepts_files": true/false,
-    "file_types": ["xlsx", "csv"] 或 [],
-    "accepts_text": true/false
-  },
-  "output_spec": {
-    "type": "file/text/html/json",
-    "file_type": "xlsx/csv/pdf/docx/html" 或 null,
-    "description": "输出描述"
-  },
-  "algorithm_summary": "技能的核心算法/处理逻辑简述",
-  "code": "完整的 Python 代码（见代码规范）"
-}
-\`\`\`
-
-## Python 代码规范
-1. **入口函数**：必须有 \`main(params)\` 函数
-2. **params 参数**：
-   - \`params.get('input', '')\` - 用户输入的文本
-   - \`params.get('files', [])\` - 上传文件的路径列表
-   - \`params.get('context', '')\` - 额外上下文
-3. **返回值**：必须返回字典，包含：
-   - \`status\`: "success" 或 "error"
-   - \`message\`: 执行结果摘要
-   - \`data\`: 处理后的数据（可选）
-   - \`output_file\`: 输出文件路径（如果有）
-4. **可用库**：
-   - pandas (已导入为 pd)
-   - openpyxl (Excel 处理)
-   - Path (pathlib)
-   - OUTPUTS_DIR (输出目录)
-   - generate_unique_filename(suffix) (生成唯一文件名)
-5. **文件处理**：
-   - Excel: \`pd.read_excel(file_path)\`
-   - CSV: \`pd.read_csv(file_path)\`
-   - 输出Excel: \`df.to_excel(output_path, index=False)\`
-6. **错误处理**：使用 try/except 包装核心逻辑
-7. **输出路径**：使用 \`OUTPUTS_DIR / generate_unique_filename('.xlsx')\`
-
-## 代码示例框架
-\`\`\`python
-# 技能名称
-# 技能描述
-
-def main(params):
-    """技能入口函数"""
-    user_input = params.get('input', '')
-    files = params.get('files', [])
-
-    try:
-        # 1. 读取和验证输入
-        if not files:
-            return {"status": "error", "message": "请上传文件"}
-
-        # 2. 处理数据
-        df = pd.read_excel(files[0])
-
-        # 3. 核心逻辑
-        result_df = process_data(df)  # 处理函数
-
-        # 4. 输出结果
-        output_path = OUTPUTS_DIR / generate_unique_filename('.xlsx')
-        result_df.to_excel(output_path, index=False)
-
-        return {
-            "status": "success",
-            "message": f"处理完成，共处理 {len(df)} 条数据",
-            "output_file": str(output_path)
-        }
-
-    except Exception as e:
-        return {"status": "error", "message": f"处理失败: {str(e)}"}
-
-def process_data(df):
-    """数据处理逻辑"""
-    # 实际处理代码
-    return df
-\`\`\`
-
-请根据用户需求，生成完整且可运行的代码。代码要处理实际业务逻辑，不要只是框架。`
-
-    let designResult = ''
+    let fullResponse = ''
     for await (const chunk of agentApi.chatStream({
-      message: designPrompt,
+      message: confirmInput,
+      history: history,
       skill_ids: skillCreatorId.value ? [skillCreatorId.value] : undefined
     }, abortController.value?.signal)) {
-      designResult += chunk
-    }
+      fullResponse += chunk
 
-    console.log('[CreateSkill] skill-creator 返回结果，长度:', designResult.length)
-
-    // 第三步：解析和生成代码
-    updateCreationStep('generate')
-    await new Promise(r => setTimeout(r, 400))
-
-    // 提取 JSON 配置
-    let config: any = null
-    const jsonMatch = designResult.match(/```json\s*([\s\S]*?)\s*```/) ||
-                      designResult.match(/\{[\s\S]*"name"[\s\S]*"code"[\s\S]*\}/)
-
-    if (jsonMatch) {
-      const jsonStr = jsonMatch[1] || jsonMatch[0]
-      try {
-        config = JSON.parse(jsonStr)
-        console.log('[CreateSkill] 成功解析技能配置:', config.name)
-      } catch (e) {
-        console.error('[CreateSkill] JSON 解析失败，尝试修复...')
-        // 尝试修复常见的 JSON 问题
-        try {
-          const fixedJson = jsonStr
-            .replace(/\\n/g, '\\n')
-            .replace(/\\'/g, "\\'")
-            .replace(/\\"/g, '\\"')
-            .replace(/[\x00-\x1F\x7F]/g, '')
-          config = JSON.parse(fixedJson)
-        } catch (e2) {
-          console.error('[CreateSkill] JSON 修复失败')
+      // 流式更新当前消息
+      if (currentGeneratingMsgId.value) {
+        const msgIndex = aiMessages.value.findIndex(m => m.id === currentGeneratingMsgId.value)
+        if (msgIndex !== -1) {
+          aiMessages.value[msgIndex] = {
+            ...aiMessages.value[msgIndex],
+            content: fullResponse || '正在创建...'
+          }
+          scrollToBottom()
         }
       }
     }
 
-    // 如果无法解析，尝试提取关键信息
-    if (!config || !config.name) {
-      console.log('[CreateSkill] 无法解析 JSON，尝试提取关键信息...')
+    console.log('[CreateSkill] skill-creator 返回，长度:', fullResponse.length)
 
-      // 尝试从文本中提取
-      const nameMatch = designResult.match(/"name"\s*:\s*"([^"]+)"/)
-      const descMatch = designResult.match(/"description"\s*:\s*"([^"]+)"/)
-      const codeMatch = designResult.match(/```python\s*([\s\S]*?)\s*```/) ||
-                        designResult.match(/def main\(params\)[\s\S]*?(?=\n\n|$)/)
+    // UI 增强：尝试从响应中提取技能信息，用于显示卡片
+    updateCreationStep('generate')
+    const extractedConfig = tryExtractSkillFromResponse(fullResponse, history)
 
-      config = {
-        name: nameMatch?.[1] || generateSkillName(userMessages),
-        description: descMatch?.[1] || userMessages.slice(0, 50),
-        icon: '⚡',
-        tags: ['自动创建'],
-        code: codeMatch?.[1] || codeMatch?.[0] || generateDefaultCode({
-          name: 'custom-skill',
-          description: userMessages.slice(0, 100)
-        })
+    if (extractedConfig && extractedConfig.code) {
+      // 成功提取到技能代码，创建临时技能
+      updateCreationStep('create')
+
+      const skillName = generateUniqueName(extractedConfig.name || '新技能')
+      const tempSkill = await skillsApi.createTemp({
+        name: skillName,
+        description: extractedConfig.description || '',
+        icon: extractedConfig.icon || '⚡',
+        code: extractedConfig.code,
+        tags: extractedConfig.tags || ['自动创建'],
+        output_config: extractedConfig.output_type ? { preferred_type: extractedConfig.output_type } : undefined
+      })
+
+      tempSkillId.value = tempSkill.temp_id
+      tempSkillName.value = skillName
+
+      finishCreationProgress(true)
+      hideProgressInCurrentMessage()
+
+      // 显示成功卡片
+      return {
+        response: fullResponse,
+        skillCreated: true,
+        skillId: tempSkill.temp_id,
+        skillName: skillName,
+        skillCard: {
+          type: 'created',
+          name: skillName,
+          icon: extractedConfig.icon || '⚡',
+          description: extractedConfig.description || '',
+          status: 'success',
+          details: extractedConfig.output_type ? [{ label: '输出', value: extractedConfig.output_type }] : [],
+          actions: [
+            { label: '测试', action: 'test' },
+            { label: '保存', action: 'save' }
+          ]
+        }
       }
     }
 
-    // 确保名称唯一
-    config.name = generateUniqueName(config.name)
-
-    // 确保有描述
-    if (!config.description) {
-      config.description = userMessages.slice(0, 50)
-    }
-
-    // 确保代码完整
-    if (!config.code || !config.code.includes('def main')) {
-      console.log('[CreateSkill] 代码不完整，使用增强的默认模板')
-      config.code = generateEnhancedCode(config, userMessages)
-    }
-
-    // 第四步：创建临时技能
-    updateCreationStep('create')
-
-    const tempSkill = await skillsApi.createTemp({
-      name: config.name,
-      description: config.description,
-      icon: config.icon || '⚡',
-      code: config.code,
-      tags: config.tags || ['自动创建']
-    })
-
-    tempSkillId.value = tempSkill.temp_id
-    tempSkillName.value = config.name
-
-    // 完成进度
+    // 未提取到代码，直接返回 skill-creator 的响应
+    // 用户可以继续对话，让 skill-creator 生成代码
     finishCreationProgress(true)
-    await new Promise(r => setTimeout(r, 600))
     hideProgressInCurrentMessage()
 
-    // 构建技能摘要卡片
-    const inputSpec = config.input_spec || {}
-    const outputSpec = config.output_spec || {}
-
-    const details: { label: string; value: string }[] = []
-    if (inputSpec.accepts_files) {
-      details.push({ label: '输入', value: `文件 (${inputSpec.file_types?.join(', ') || '所有类型'})` })
-    }
-    if (inputSpec.accepts_text) {
-      details.push({ label: '输入', value: '文本' })
-    }
-    if (outputSpec.type) {
-      details.push({ label: '输出', value: outputSpec.file_type || outputSpec.type })
-    }
-
-    const skillCard: SkillSummaryCard = {
-      type: 'created',
-      name: config.name,
-      icon: config.icon || '⚡',
-      description: config.description,
-      status: 'success',
-      details,
-      actions: [
-        { label: '测试', action: 'test' },
-        { label: '保存', action: 'save' }
-      ]
-    }
-
-    return {
-      response: '',  // 不需要文字，卡片已经显示了
-      skillCreated: true,
-      skillId: tempSkill.temp_id,
-      skillName: config.name,
-      skillCard
-    }
+    return { response: fullResponse }
 
   } catch (error: any) {
     console.error('[CreateSkill] 创建失败:', error)
     finishCreationProgress(false)
     hideProgressInCurrentMessage()
 
-    // 构建创建失败卡片
-    const errorCard: SkillSummaryCard = {
-      type: 'created',
-      name: '创建失败',
-      status: 'error',
-      description: error.message || '请重新描述需求',
-      actions: [
-        { label: '重试', action: 'retry' }
-      ]
+    return {
+      response: '',
+      skillCard: {
+        type: 'created',
+        name: '创建失败',
+        status: 'error',
+        description: error.message || '请重新描述需求',
+        actions: [{ label: '重试', action: 'retry' }]
+      }
     }
-    return { response: '', skillCard: errorCard }
   }
 }
 
+// UI 增强：尝试从 skill-creator 响应中提取技能信息
+// 这是纯粹的 UI 辅助，不影响 skill-creator 的核心功能
+const tryExtractSkillFromResponse = (
+  response: string,
+  history: Array<{ role: 'user' | 'assistant', content: string }>
+): any => {
+  // 尝试提取 JSON 配置
+  const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/)
+  if (jsonMatch) {
+    try {
+      const config = JSON.parse(jsonMatch[1])
+      if (config.name && config.code) {
+        console.log('[Extract] 从 JSON 提取技能:', config.name)
+        return config
+      }
+    } catch (e) {
+      // JSON 解析失败，继续尝试其他方式
+    }
+  }
+
+  // 尝试提取 Python 代码块
+  const codeMatch = response.match(/```python\s*([\s\S]*?)\s*```/)
+  if (codeMatch?.[1]) {
+    const nameMatch = response.match(/"name"\s*:\s*"([^"]+)"/) ||
+                      response.match(/技能名称[：:]\s*(.+?)[\n\r]/) ||
+                      response.match(/名称[：:]\s*(.+?)[\n\r]/)
+    const descMatch = response.match(/"description"\s*:\s*"([^"]+)"/) ||
+                      response.match(/描述[：:]\s*(.+?)[\n\r]/)
+
+    // 从对话历史中提取用户需求作为备用描述
+    const userMessages = history.filter(m => m.role === 'user').map(m => m.content).join(' ')
+    const fallbackName = generateSkillName(userMessages)
+    const fallbackDesc = userMessages.slice(0, 100)
+
+    console.log('[Extract] 从 Python 代码块提取技能')
+    return {
+      name: nameMatch?.[1]?.trim() || fallbackName,
+      description: descMatch?.[1]?.trim() || fallbackDesc,
+      icon: '⚡',
+      tags: ['自动创建'],
+      code: codeMatch[1]
+    }
+  }
+
+  return null
+}
+
+// 解析 skill-creator 返回的技能配置
+const parseSkillConfig = (result: string, fallbackDesc: string): any => {
+  // 尝试提取 JSON
+  const jsonMatch = result.match(/```json\s*([\s\S]*?)\s*```/) ||
+                    result.match(/\{[\s\S]*"name"[\s\S]*"code"[\s\S]*\}/)
+
+  if (jsonMatch) {
+    const jsonStr = jsonMatch[1] || jsonMatch[0]
+    try {
+      const config = JSON.parse(jsonStr)
+      if (config.name && config.code) {
+        console.log('[CreateSkill] 成功解析技能配置:', config.name)
+        return config
+      }
+    } catch (e) {
+      console.error('[CreateSkill] JSON 解析失败:', e)
+      // 尝试修复常见问题
+      try {
+        const fixedJson = jsonStr.replace(/[\x00-\x1F\x7F]/g, '')
+        const config = JSON.parse(fixedJson)
+        if (config.name && config.code) return config
+      } catch (e2) {
+        // 继续尝试其他方式
+      }
+    }
+  }
+
+  // 尝试从文本中提取关键信息
+  const nameMatch = result.match(/"name"\s*:\s*"([^"]+)"/)
+  const descMatch = result.match(/"description"\s*:\s*"([^"]+)"/)
+  const codeMatch = result.match(/```python\s*([\s\S]*?)\s*```/)
+  const outputTypeMatch = result.match(/"output_type"\s*:\s*"([^"]+)"/)
+
+  if (codeMatch?.[1]) {
+    return {
+      name: nameMatch?.[1] || generateSkillName(fallbackDesc),
+      description: descMatch?.[1] || fallbackDesc.slice(0, 50),
+      icon: '⚡',
+      tags: ['自动创建'],
+      output_type: outputTypeMatch?.[1],
+      code: codeMatch[1]
+    }
+  }
+
+  return null
+}
+
 // 修改现有技能（临时技能或编辑中的永久技能）
+// 纯透传模式：直接把修改请求发给 skill-creator
 const modifyExistingSkill = async (
   modifyRequest: string,
   history: Array<{ role: 'user' | 'assistant', content: string }>
@@ -1693,7 +1968,7 @@ const modifyExistingSkill = async (
     return { response: '没有可修改的技能。' }
   }
 
-  // 显示进度
+  // 显示进度（UI 增强）
   showProgressInCurrentMessage()
   startCreationProgress()
   creationProgress.value = [
@@ -1703,143 +1978,119 @@ const modifyExistingSkill = async (
   ]
 
   try {
-    // 分析修改需求
-    updateCreationStep('analyze')
-    await new Promise(r => setTimeout(r, 500))
-
-    // 生成修改后的代码
     updateCreationStep('generate')
+    console.log('[ModifySkill] 纯透传模式，发送修改请求到 skill-creator')
 
-    const modifyPrompt = `你需要修改一个已有的技能。
-
-## 当前技能
-名称：${tempSkillName.value}
-
-## 对话历史（包含原始需求和修改请求）
-${history.map(m => `${m.role === 'user' ? '用户' : 'AI'}: ${m.content}`).join('\n')}
-
-## 最新修改请求
-${modifyRequest}
-
-## 要求
-根据修改请求，生成更新后的技能配置。输出 JSON 格式：
-
-\`\`\`json
-{
-  "name": "技能名称",
-  "description": "更新后的描述",
-  "code": "完整的更新后 Python 代码"
-}
-\`\`\`
-
-代码规范：
-- 必须有 main(params) 函数
-- params.get('input', '') 获取文本输入
-- params.get('files', []) 获取文件路径列表
-- 返回字典包含 status, message, 可选 output_file
-- 使用 pd (pandas), Path, OUTPUTS_DIR, generate_unique_filename`
-
-    let result = ''
+    // 纯透传：直接发送修改请求，带上对话历史
+    let fullResponse = ''
     for await (const chunk of agentApi.chatStream({
-      message: modifyPrompt,
+      message: modifyRequest,
+      history: history,
       skill_ids: skillCreatorId.value ? [skillCreatorId.value] : undefined
     }, abortController.value?.signal)) {
-      result += chunk
-    }
+      fullResponse += chunk
 
-    // 解析新配置
-    let config: any = null
-    const jsonMatch = result.match(/```json\s*([\s\S]*?)\s*```/) ||
-                      result.match(/\{[\s\S]*"name"[\s\S]*"code"[\s\S]*\}/)
-
-    if (jsonMatch) {
-      try {
-        config = JSON.parse(jsonMatch[1] || jsonMatch[0])
-      } catch (e) {
-        console.error('[ModifySkill] JSON 解析失败')
+      // 流式更新当前消息
+      if (currentGeneratingMsgId.value) {
+        const msgIndex = aiMessages.value.findIndex(m => m.id === currentGeneratingMsgId.value)
+        if (msgIndex !== -1) {
+          aiMessages.value[msgIndex] = {
+            ...aiMessages.value[msgIndex],
+            content: fullResponse || '正在修改...'
+          }
+          scrollToBottom()
+        }
       }
     }
 
-    if (!config || !config.code) {
-      finishCreationProgress(false)
-      hideProgressInCurrentMessage()
-      return { response: '我没能理解你的修改要求，可以更详细地描述一下需要修改什么吗？' }
+    console.log('[ModifySkill] skill-creator 返回，长度:', fullResponse.length)
+
+    // UI 增强：尝试从响应中提取更新后的代码
+    const extractedConfig = tryExtractSkillFromResponse(fullResponse, history)
+
+    if (extractedConfig && extractedConfig.code) {
+      updateCreationStep('update')
+
+      const updatedName = extractedConfig.name || tempSkillName.value || 'skill'
+
+      if (isEditingPermanent) {
+        // 更新永久技能 - 显示模式选择对话框
+        finishCreationProgress(true)
+        hideProgressInCurrentMessage()
+
+        pendingUpdateData.value = {
+          skillId: editingSkillId.value!,
+          code: extractedConfig.code,
+          skillName: updatedName,
+          description: extractedConfig.description || '',
+          icon: extractedConfig.icon || '⚡'
+        }
+        selectedUpdateMode.value = 'new_version'
+        showUpdateModeDialog.value = true
+
+        return {
+          response: fullResponse,
+          pendingModeSelection: true
+        }
+      } else {
+        // 删除旧的临时技能，创建新的
+        await skillsApi.deleteTemp(tempSkillId.value!)
+
+        const newTempSkill = await skillsApi.createTemp({
+          name: updatedName,
+          description: extractedConfig.description,
+          code: extractedConfig.code,
+          tags: ['自动创建', '已修改']
+        })
+
+        tempSkillId.value = newTempSkill.temp_id
+        tempSkillName.value = updatedName
+
+        finishCreationProgress(true)
+        hideProgressInCurrentMessage()
+
+        return {
+          response: fullResponse,
+          skillCreated: true,
+          skillId: newTempSkill.temp_id,
+          skillName: updatedName,
+          skillCard: {
+            type: 'created',
+            name: updatedName,
+            icon: extractedConfig.icon || '⚡',
+            description: extractedConfig.description || '已更新',
+            status: 'success',
+            details: [{ label: '版本', value: '已更新' }],
+            actions: [
+              { label: '测试', action: 'test' },
+              { label: '保存', action: 'save' }
+            ]
+          }
+        }
+      }
     }
 
-    // 更新技能
-    updateCreationStep('update')
-
-    const updatedName = config.name || tempSkillName.value || 'skill'
-    let resultSkillId: string
-
-    if (isEditingPermanent) {
-      // 更新永久技能
-      await skillsApi.update(editingSkillId.value!, {
-        name: updatedName,
-        description: config.description,
-        code: config.code
-      })
-      resultSkillId = editingSkillId.value!
-      tempSkillName.value = updatedName
-    } else {
-      // 删除旧的临时技能，创建新的
-      await skillsApi.deleteTemp(tempSkillId.value!)
-
-      const newTempSkill = await skillsApi.createTemp({
-        name: updatedName,
-        description: config.description,
-        code: config.code,
-        tags: ['自动创建', '已修改']
-      })
-
-      tempSkillId.value = newTempSkill.temp_id
-      tempSkillName.value = updatedName
-      resultSkillId = newTempSkill.temp_id
-    }
-
+    // 未提取到代码，直接返回 skill-creator 的响应
     finishCreationProgress(true)
-    await new Promise(r => setTimeout(r, 500))
     hideProgressInCurrentMessage()
 
-    // 构建修改成功卡片
-    const modifiedCard: SkillSummaryCard = {
-      type: 'created',
-      name: updatedName,
-      icon: config.icon || '⚡',
-      description: config.description || '已更新',
-      status: 'success',
-      details: [
-        { label: '版本', value: '已更新' }
-      ],
-      actions: isEditingPermanent
-        ? [{ label: '测试', action: 'test' }]
-        : [{ label: '测试', action: 'test' }, { label: '保存', action: 'save' }]
-    }
-
-    return {
-      response: '',
-      skillCreated: !isEditingPermanent,
-      skillId: resultSkillId,
-      skillName: updatedName,
-      skillCard: modifiedCard
-    }
+    return { response: fullResponse }
 
   } catch (error: any) {
     console.error('[ModifySkill] 修改失败:', error)
     finishCreationProgress(false)
     hideProgressInCurrentMessage()
 
-    // 构建修改失败卡片
-    const errorCard: SkillSummaryCard = {
-      type: 'created',
-      name: tempSkillName.value || '技能',
-      status: 'error',
-      description: error.message || '修改失败',
-      actions: [
-        { label: '重试', action: 'retry' }
-      ]
+    return {
+      response: '',
+      skillCard: {
+        type: 'created',
+        name: tempSkillName.value || '技能',
+        status: 'error',
+        description: error.message || '修改失败',
+        actions: [{ label: '重试', action: 'retry' }]
+      }
     }
-    return { response: '', skillCard: errorCard }
   }
 }
 
@@ -2798,7 +3049,7 @@ onUnmounted(() => {
                     :key="idx"
                     class="quick-action-btn"
                     :class="qa.action"
-                    @click="handleCardAction(qa.action)"
+                    @click="handleCardAction(qa.action, qa.data)"
                   >
                     {{ qa.label }}
                   </button>
@@ -2930,6 +3181,73 @@ onUnmounted(() => {
           </div>
         </div>
         </template>
+      </div>
+    </div>
+  </Transition>
+
+  <!-- 更新模式选择对话框 -->
+  <Transition name="modal">
+    <div v-if="showUpdateModeDialog" class="modal-overlay update-mode-overlay" @click.self="cancelUpdate">
+      <div class="update-mode-dialog">
+        <div class="dialog-header">
+          <span class="dialog-icon">💾</span>
+          <h3>选择保存方式</h3>
+        </div>
+
+        <div class="dialog-body">
+          <p class="dialog-hint">修改技能「{{ pendingUpdateData?.skillName }}」，请选择保存方式：</p>
+
+          <div class="mode-options">
+            <label
+              class="mode-option"
+              :class="{ selected: selectedUpdateMode === 'overwrite' }"
+            >
+              <input
+                type="radio"
+                v-model="selectedUpdateMode"
+                value="overwrite"
+              />
+              <div class="option-content">
+                <div class="option-title">
+                  <span class="option-icon">🔄</span>
+                  覆盖当前版本
+                </div>
+                <div class="option-desc">
+                  直接修改当前版本，不保留历史记录。
+                  <br/>适合小修改、bug修复。
+                </div>
+              </div>
+            </label>
+
+            <label
+              class="mode-option"
+              :class="{ selected: selectedUpdateMode === 'new_version' }"
+            >
+              <input
+                type="radio"
+                v-model="selectedUpdateMode"
+                value="new_version"
+              />
+              <div class="option-content">
+                <div class="option-title">
+                  <span class="option-icon">📦</span>
+                  创建新版本
+                </div>
+                <div class="option-desc">
+                  保留当前版本，创建新版本。
+                  <br/>适合重大改动，可随时回退。
+                </div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="dialog-footer">
+          <button class="btn-cancel" @click="cancelUpdate">取消</button>
+          <button class="btn-confirm" @click="executeUpdate">
+            {{ selectedUpdateMode === 'overwrite' ? '覆盖保存' : '创建新版本' }}
+          </button>
+        </div>
       </div>
     </div>
   </Transition>
@@ -3736,15 +4054,28 @@ function formatMessage(content: string): string {
 }
 
 .quick-action-btn.skip-test,
-.quick-action-btn.stay-here {
+.quick-action-btn.stay-here,
+.quick-action-btn.continue {
   background: #f5f5f5;
   border-color: #ddd;
   color: #666;
 }
 
 .quick-action-btn.skip-test:hover,
-.quick-action-btn.stay-here:hover {
+.quick-action-btn.stay-here:hover,
+.quick-action-btn.continue:hover {
   background: #eee;
+}
+
+.quick-action-btn.save-extracted-skill {
+  background: #10b981;
+  border-color: #10b981;
+  color: #fff;
+}
+
+.quick-action-btn.save-extracted-skill:hover {
+  background: #059669;
+  border-color: #059669;
 }
 
 /* 生成中气泡 - 点击可取消 */
@@ -4712,5 +5043,149 @@ function formatMessage(content: string): string {
 .slide-leave-to {
   transform: translateX(100%);
   opacity: 0;
+}
+
+/* ========== 更新模式选择对话框 ========== */
+.update-mode-overlay {
+  z-index: 1100;  /* 高于主模态框 */
+}
+
+.update-mode-dialog {
+  background: #1e1e2e;
+  border-radius: 16px;
+  width: 420px;
+  max-width: 90vw;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.dialog-icon {
+  font-size: 24px;
+}
+
+.dialog-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.dialog-body {
+  padding: 20px 24px;
+}
+
+.dialog-hint {
+  margin: 0 0 16px;
+  font-size: 14px;
+  color: #94a3b8;
+}
+
+.mode-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 2px solid transparent;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.mode-option:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.mode-option.selected {
+  background: rgba(99, 102, 241, 0.1);
+  border-color: #6366f1;
+}
+
+.mode-option input[type="radio"] {
+  margin-top: 4px;
+  accent-color: #6366f1;
+  transform: scale(1.2);
+}
+
+.option-content {
+  flex: 1;
+}
+
+.option-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 6px;
+}
+
+.option-icon {
+  font-size: 16px;
+}
+
+.option-desc {
+  font-size: 13px;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 24px;
+  background: rgba(0, 0, 0, 0.2);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.btn-cancel {
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #94a3b8;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-cancel:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #e2e8f0;
+}
+
+.btn-confirm {
+  padding: 10px 24px;
+  font-size: 14px;
+  font-weight: 600;
+  color: white;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-confirm:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
 }
 </style>

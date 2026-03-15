@@ -103,6 +103,8 @@ export interface SkillUpdate {
   author?: string
   version?: string
   code?: string  // 更新脚本代码
+  // 更新模式: overwrite=覆盖当前版本, new_version=创建新版本
+  update_mode?: 'overwrite' | 'new_version'
 }
 
 export interface SkillUploadData {
