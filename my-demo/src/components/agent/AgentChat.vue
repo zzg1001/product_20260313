@@ -309,6 +309,239 @@ const showSkillExecution = ref(false)
 const executingSkill = ref<{ name: string; icon: string; description: string } | null>(null)
 const executionContext = ref<string>('')
 const executingStepInfo = ref<{ messageId: number; stepId: number; fromPaused?: boolean } | null>(null)
+const skillSidePanelRef = ref<HTMLElement | null>(null)
+
+// 面板宽度拖拽调整
+const panelWidth = ref(380)  // 默认宽度
+const isResizing = ref(false)
+const resizeDirection = ref('')  // 调整方向: n, s, e, w, ne, nw, se, sw
+const minPanelWidth = 300
+const maxPanelWidth = 800
+const minPanelHeight = 200
+const maxPanelHeight = 800
+
+// 浮动面板状态
+const isFloating = ref(false)
+const floatPosition = ref({ x: 0, y: 0 })
+const floatSize = ref({ width: 320, height: 480 })  // 2:3 比例
+const resizeStartPos = ref({ x: 0, y: 0 })
+const resizeStartSize = ref({ width: 0, height: 0 })
+const resizeStartPosition = ref({ x: 0, y: 0 })
+const isDraggingPanel = ref(false)
+const dragOffset = ref({ x: 0, y: 0 })
+const magnetDistance = 80  // 磁吸距离
+const hasLeftDockArea = ref(false)  // 是否已经离开过停靠区域
+
+// 开始拖拽移动面板（通过头部拖拽）
+const startDragPanel = (e: MouseEvent) => {
+  e.preventDefault()
+  isDraggingPanel.value = true
+  hasLeftDockArea.value = false  // 重置
+
+  const panel = skillSidePanelRef.value
+  if (!panel) return
+
+  const rect = panel.getBoundingClientRect()
+
+  if (!isFloating.value) {
+    // 第一次拖拽，变成浮动状态
+    isFloating.value = true
+    // 初始位置设置为面板中心跟随鼠标
+    floatPosition.value = {
+      x: e.clientX - floatSize.value.width / 2,
+      y: e.clientY - 20
+    }
+  }
+
+  dragOffset.value = {
+    x: e.clientX - floatPosition.value.x,
+    y: e.clientY - floatPosition.value.y
+  }
+
+  document.addEventListener('mousemove', onDragPanel)
+  document.addEventListener('mouseup', stopDragPanel)
+  document.body.style.cursor = 'move'
+  document.body.style.userSelect = 'none'
+}
+
+const onDragPanel = (e: MouseEvent) => {
+  if (!isDraggingPanel.value) return
+
+  let newX = e.clientX - dragOffset.value.x
+  let newY = e.clientY - dragOffset.value.y
+
+  // 边界限制
+  const maxX = window.innerWidth - floatSize.value.width
+  const maxY = window.innerHeight - floatSize.value.height
+  newX = Math.max(0, Math.min(maxX, newX))
+  newY = Math.max(0, Math.min(maxY, newY))
+
+  const rightEdge = window.innerWidth - newX - floatSize.value.width
+
+  // 检测是否离开过停靠区域（需要先拖离右侧才能触发磁吸）
+  if (rightEdge > magnetDistance * 2) {
+    hasLeftDockArea.value = true
+  }
+
+  // 只有离开过停靠区域后，再靠近右侧才触发磁吸
+  if (hasLeftDockArea.value && rightEdge < magnetDistance) {
+    isFloating.value = false
+    panelWidth.value = 380
+    hasLeftDockArea.value = false
+    // 停止拖拽
+    isDraggingPanel.value = false
+    document.removeEventListener('mousemove', onDragPanel)
+    document.removeEventListener('mouseup', stopDragPanel)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    return
+  }
+
+  floatPosition.value = { x: newX, y: newY }
+}
+
+const stopDragPanel = () => {
+  isDraggingPanel.value = false
+  document.removeEventListener('mousemove', onDragPanel)
+  document.removeEventListener('mouseup', stopDragPanel)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+}
+
+// 面板样式计算
+const panelStyle = computed(() => {
+  if (isFloating.value) {
+    return {
+      position: 'fixed',
+      top: floatPosition.value.y + 'px',
+      left: floatPosition.value.x + 'px',
+      right: 'auto',
+      width: floatSize.value.width + 'px',
+      height: floatSize.value.height + 'px',
+      borderRadius: '12px',
+      boxShadow: '0 8px 32px rgba(0, 0, 0, 0.15)'
+    }
+  }
+  return {
+    width: panelWidth.value + 'px'
+  }
+})
+
+const startResize = (e: MouseEvent, direction?: string) => {
+  e.preventDefault()
+  e.stopPropagation()
+  isResizing.value = true
+  resizeDirection.value = direction || 'w'
+  resizeStartPos.value = { x: e.clientX, y: e.clientY }
+  resizeStartSize.value = { ...floatSize.value }
+  resizeStartPosition.value = { ...floatPosition.value }
+
+  document.addEventListener('mousemove', onResize)
+  document.addEventListener('mouseup', stopResize)
+
+  // 设置光标
+  const cursorMap: Record<string, string> = {
+    n: 'ns-resize', s: 'ns-resize',
+    e: 'ew-resize', w: 'ew-resize',
+    ne: 'nesw-resize', sw: 'nesw-resize',
+    nw: 'nwse-resize', se: 'nwse-resize'
+  }
+  document.body.style.cursor = cursorMap[direction || 'w'] || 'col-resize'
+  document.body.style.userSelect = 'none'
+}
+
+const onResize = (e: MouseEvent) => {
+  if (!isResizing.value) return
+
+  const dir = resizeDirection.value
+  const dx = e.clientX - resizeStartPos.value.x
+  const dy = e.clientY - resizeStartPos.value.y
+
+  if (isFloating.value) {
+    // 浮动模式：多方向调整
+    let newWidth = resizeStartSize.value.width
+    let newHeight = resizeStartSize.value.height
+    let newX = resizeStartPosition.value.x
+    let newY = resizeStartPosition.value.y
+
+    // 水平方向
+    if (dir.includes('e')) {
+      newWidth = resizeStartSize.value.width + dx
+    } else if (dir.includes('w')) {
+      newWidth = resizeStartSize.value.width - dx
+      newX = resizeStartPosition.value.x + dx
+    }
+
+    // 垂直方向
+    if (dir.includes('s')) {
+      newHeight = resizeStartSize.value.height + dy
+    } else if (dir.includes('n')) {
+      newHeight = resizeStartSize.value.height - dy
+      newY = resizeStartPosition.value.y + dy
+    }
+
+    // 应用限制
+    newWidth = Math.min(maxPanelWidth, Math.max(minPanelWidth, newWidth))
+    newHeight = Math.min(maxPanelHeight, Math.max(minPanelHeight, newHeight))
+
+    // 如果尺寸被限制，调整位置
+    if (dir.includes('w') && newWidth !== resizeStartSize.value.width - dx) {
+      newX = resizeStartPosition.value.x + resizeStartSize.value.width - newWidth
+    }
+    if (dir.includes('n') && newHeight !== resizeStartSize.value.height - dy) {
+      newY = resizeStartPosition.value.y + resizeStartSize.value.height - newHeight
+    }
+
+    // 边界限制
+    newX = Math.max(0, Math.min(window.innerWidth - newWidth, newX))
+    newY = Math.max(0, Math.min(window.innerHeight - newHeight, newY))
+
+    floatSize.value = { width: newWidth, height: newHeight }
+    floatPosition.value = { x: newX, y: newY }
+  } else {
+    // 停靠模式：只调整宽度
+    const newWidth = window.innerWidth - e.clientX
+    panelWidth.value = Math.min(maxPanelWidth, Math.max(minPanelWidth, newWidth))
+  }
+}
+
+const stopResize = () => {
+  isResizing.value = false
+  resizeDirection.value = ''
+  document.removeEventListener('mousemove', onResize)
+  document.removeEventListener('mouseup', stopResize)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+}
+
+// 点击面板外部时关闭面板
+const handleClickOutsidePanel = (e: MouseEvent) => {
+  if (!showSkillExecution.value) return
+  if (!skillSidePanelRef.value) return
+  if (isResizing.value) return  // 拖拽调整宽度时不关闭
+  if (isDraggingPanel.value) return  // 拖拽移动面板时不关闭
+
+  // 检查点击是否在面板外部
+  if (!skillSidePanelRef.value.contains(e.target as Node)) {
+    closeSkillExecution(true)
+  }
+}
+
+// 监听面板显示状态，添加/移除点击外部关闭的事件监听
+watch(showSkillExecution, (isShow) => {
+  if (isShow) {
+    // 延迟添加监听，避免打开面板的点击事件立即触发关闭
+    setTimeout(() => {
+      document.addEventListener('click', handleClickOutsidePanel)
+    }, 100)
+  } else {
+    document.removeEventListener('click', handleClickOutsidePanel)
+  }
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleClickOutsidePanel)
+})
 
 // 右侧技能面板相关状态
 interface SkillPanelMessage {
@@ -533,6 +766,9 @@ const closeSkillExecution = (cancelled = false) => {
   skillPanelComplete.value = false
   skillPanelWaitingConfirm.value = false
   skillPanelSummary.value = ''
+  // 重置浮动状态
+  isFloating.value = false
+  panelWidth.value = 380
 }
 
 // 发送面板消息 - 多轮对话
@@ -3388,10 +3624,40 @@ const openOutputFile = async (file: OutputFile) => {
 
     <!-- 右侧技能执行面板 -->
     <Transition name="slide-panel">
-      <div v-if="showSkillExecution && executingSkill" class="skill-side-panel">
+      <div
+        v-if="showSkillExecution && executingSkill"
+        ref="skillSidePanelRef"
+        class="skill-side-panel"
+        :class="{ 'is-floating': isFloating }"
+        :style="panelStyle"
+      >
+        <!-- 左侧拖拽手柄（非浮动时显示） -->
+        <div
+          v-if="!isFloating"
+          class="panel-resize-handle"
+          @mousedown="startResize($event, 'w')"
+          :class="{ 'is-resizing': isResizing }"
+        ></div>
+
+        <!-- 浮动时的8方向拖拽手柄 -->
+        <template v-if="isFloating">
+          <div class="float-resize-handle float-resize-n" @mousedown="startResize($event, 'n')"></div>
+          <div class="float-resize-handle float-resize-s" @mousedown="startResize($event, 's')"></div>
+          <div class="float-resize-handle float-resize-e" @mousedown="startResize($event, 'e')"></div>
+          <div class="float-resize-handle float-resize-w" @mousedown="startResize($event, 'w')"></div>
+          <div class="float-resize-handle float-resize-ne" @mousedown="startResize($event, 'ne')"></div>
+          <div class="float-resize-handle float-resize-nw" @mousedown="startResize($event, 'nw')"></div>
+          <div class="float-resize-handle float-resize-se" @mousedown="startResize($event, 'se')"></div>
+          <div class="float-resize-handle float-resize-sw" @mousedown="startResize($event, 'sw')"></div>
+        </template>
+
         <div class="side-panel-inner">
-          <!-- 面板头部 -->
-          <header class="panel-header">
+          <!-- 面板头部（可拖拽移动） -->
+          <header
+            class="panel-header"
+            :class="{ 'is-draggable': true, 'is-floating': isFloating }"
+            @mousedown="startDragPanel"
+          >
             <div class="panel-skill-info">
               <div class="panel-skill-avatar">
                 <span>{{ executingSkill.icon }}</span>
@@ -3412,11 +3678,6 @@ const openOutputFile = async (file: OutputFile) => {
                 </Transition>
               </div>
             </div>
-            <button class="panel-close-btn" @click="closeSkillExecution(true)" title="关闭">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M18 6L6 18M6 6l12 12"/>
-              </svg>
-            </button>
           </header>
 
           <!-- 对话区域 -->
@@ -3506,10 +3767,21 @@ const openOutputFile = async (file: OutputFile) => {
               <!-- 输入状态 -->
               <div v-else key="input" class="panel-input-area">
                 <div class="panel-input-row">
+                  <!-- 跳过配置按钮（放在输入框前面） -->
+                  <button
+                    v-if="!skillPanelProcessing && skillPanelMessages.length <= 1"
+                    class="panel-quick-btn"
+                    @click="quickExecuteSkillPanel"
+                    title="跳过配置，直接执行"
+                  >
+                    <svg viewBox="0 0 16 16" fill="none">
+                      <path d="M8.5 1L3 9h4.5l-.5 6 5.5-8H8l.5-6z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </button>
                   <textarea
                     ref="skillPanelInputRef"
                     v-model="skillPanelInput"
-                    placeholder="输入你的需求..."
+                    placeholder="输入需求..."
                     @keydown.enter.exact.prevent="sendSkillPanelMessage"
                     :disabled="skillPanelProcessing"
                     rows="1"
@@ -3524,16 +3796,6 @@ const openOutputFile = async (file: OutputFile) => {
                     </svg>
                   </button>
                 </div>
-                <button
-                  v-if="!skillPanelProcessing && skillPanelMessages.length <= 1"
-                  class="panel-quick-btn"
-                  @click="quickExecuteSkillPanel"
-                >
-                  <svg viewBox="0 0 16 16" fill="none">
-                    <path d="M8.5 1L3 9h4.5l-.5 6 5.5-8H8l.5-6z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                  跳过配置，直接执行
-                </button>
               </div>
             </Transition>
           </footer>
@@ -4695,7 +4957,7 @@ const openOutputFile = async (file: OutputFile) => {
 .message-user .message-content p {
   margin: 0;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.35;
 }
 
 .message-user .message-time {
@@ -4744,36 +5006,36 @@ const openOutputFile = async (file: OutputFile) => {
 }
 
 .message-content p {
-  margin: 0 0 8px 0;
+  margin: 0 0 6px 0;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.4;
 }
 
 /* Markdown 样式 */
 .markdown-content {
   font-size: 13px;
-  line-height: 1.7;
+  line-height: 1.4;
   word-wrap: break-word;
 }
 
 .markdown-content h2 {
   font-size: 16px;
   font-weight: 700;
-  margin: 16px 0 8px 0;
+  margin: 12px 0 6px 0;
   color: #1e293b;
 }
 
 .markdown-content h3 {
   font-size: 14px;
   font-weight: 600;
-  margin: 12px 0 6px 0;
+  margin: 10px 0 4px 0;
   color: #334155;
 }
 
 .markdown-content h4 {
   font-size: 13px;
   font-weight: 600;
-  margin: 10px 0 4px 0;
+  margin: 8px 0 3px 0;
   color: #475569;
 }
 
@@ -4789,9 +5051,9 @@ const openOutputFile = async (file: OutputFile) => {
 .markdown-content .code-block {
   background: #1e293b;
   color: #e2e8f0;
-  padding: 12px 16px;
+  padding: 10px 14px;
   border-radius: 8px;
-  margin: 10px 0;
+  margin: 8px 0;
   overflow-x: auto;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 12px;
@@ -4814,7 +5076,7 @@ const openOutputFile = async (file: OutputFile) => {
 }
 
 .markdown-content li {
-  margin: 4px 0;
+  margin: 2px 0;
   padding-left: 8px;
   position: relative;
 }
@@ -6303,7 +6565,6 @@ const openOutputFile = async (file: OutputFile) => {
   position: absolute;
   top: 0;
   right: 0;
-  width: 380px;
   height: 100%;
   background: rgba(255, 255, 255, 0.98);
   backdrop-filter: blur(20px);
@@ -6312,14 +6573,125 @@ const openOutputFile = async (file: OutputFile) => {
   box-shadow: -8px 0 32px rgba(139, 92, 246, 0.1);
   z-index: 100;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+}
+
+/* 拖拽手柄 */
+.panel-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 4px;
+  height: 100%;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.2s;
+  z-index: 10;
+}
+
+.panel-resize-handle:hover,
+.panel-resize-handle.is-resizing {
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+}
+
+.panel-resize-handle::after {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 0;
+  width: 12px;
+  height: 100%;
+}
+
+/* 浮动面板8方向拖拽手柄 */
+.float-resize-handle {
+  position: absolute;
+  z-index: 20;
+}
+
+/* 边缘手柄 */
+.float-resize-n {
+  top: 0;
+  left: 8px;
+  right: 8px;
+  height: 6px;
+  cursor: ns-resize;
+}
+
+.float-resize-s {
+  bottom: 0;
+  left: 8px;
+  right: 8px;
+  height: 6px;
+  cursor: ns-resize;
+}
+
+.float-resize-e {
+  right: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+.float-resize-w {
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+/* 角落手柄 */
+.float-resize-ne {
+  top: 0;
+  right: 0;
+  width: 12px;
+  height: 12px;
+  cursor: nesw-resize;
+}
+
+.float-resize-nw {
+  top: 0;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  cursor: nwse-resize;
+}
+
+.float-resize-se {
+  bottom: 0;
+  right: 0;
+  width: 12px;
+  height: 12px;
+  cursor: nwse-resize;
+}
+
+.float-resize-sw {
+  bottom: 0;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  cursor: nesw-resize;
 }
 
 .side-panel-inner {
   display: flex;
   flex-direction: column;
+  flex: 1;
   height: 100%;
   overflow: hidden;
+}
+
+/* 浮动状态 */
+.skill-side-panel.is-floating {
+  border-radius: 12px;
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  overflow: hidden;
+}
+
+.skill-side-panel.is-floating .side-panel-inner {
+  border-radius: 12px;
 }
 
 /* 面板头部 */
@@ -6327,37 +6699,45 @@ const openOutputFile = async (file: OutputFile) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
+  padding: 8px 12px;
   background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(124, 58, 237, 0.04) 100%);
   border-bottom: 1px solid rgba(139, 92, 246, 0.1);
+}
+
+.panel-header.is-draggable {
+  cursor: move;
+}
+
+.panel-header.is-floating {
+  border-radius: 12px 12px 0 0;
 }
 
 .panel-skill-info {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .panel-skill-avatar {
-  width: 40px;
-  height: 40px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: linear-gradient(145deg, #8b5cf6 0%, #7c3aed 100%);
-  border-radius: 12px;
-  font-size: 18px;
-  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+  border-radius: 8px;
+  font-size: 14px;
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
 }
 
 .panel-skill-meta {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .panel-skill-name {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   color: #1e293b;
   margin: 0;
@@ -6366,8 +6746,8 @@ const openOutputFile = async (file: OutputFile) => {
 .panel-status {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 12px;
+  gap: 4px;
+  font-size: 10px;
   font-weight: 500;
 }
 
@@ -6395,30 +6775,6 @@ const openOutputFile = async (file: OutputFile) => {
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.5; transform: scale(0.8); }
-}
-
-.panel-close-btn {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  color: #94a3b8;
-  transition: all 0.2s ease;
-}
-
-.panel-close-btn:hover {
-  background: rgba(0, 0, 0, 0.05);
-  color: #64748b;
-}
-
-.panel-close-btn svg {
-  width: 18px;
-  height: 18px;
 }
 
 /* 对话区域 */
@@ -6467,7 +6823,7 @@ const openOutputFile = async (file: OutputFile) => {
   padding: 10px 14px;
   border-radius: 16px;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.3;
   background: #f1f5f9;
   color: #334155;
   border-bottom-left-radius: 4px;
@@ -6544,7 +6900,7 @@ const openOutputFile = async (file: OutputFile) => {
 
 /* 底部输入区 */
 .panel-footer {
-  padding: 14px 20px 18px;
+  padding: 8px 12px 10px;
   border-top: 1px solid rgba(0, 0, 0, 0.05);
   background: rgba(248, 250, 252, 0.6);
 }
@@ -6552,28 +6908,28 @@ const openOutputFile = async (file: OutputFile) => {
 .panel-input-area {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .panel-input-row {
   display: flex;
-  gap: 8px;
-  align-items: flex-end;
+  gap: 6px;
+  align-items: center;
 }
 
 .panel-input-row textarea {
   flex: 1;
-  padding: 10px 14px;
+  padding: 6px 10px;
   border: 1px solid rgba(139, 92, 246, 0.2);
-  border-radius: 12px;
-  font-size: 13px;
+  border-radius: 8px;
+  font-size: 12px;
   font-family: inherit;
   resize: none;
   outline: none;
   background: #fff;
   transition: all 0.2s ease;
-  min-height: 40px;
-  max-height: 80px;
+  min-height: 32px;
+  max-height: 60px;
 }
 
 .panel-input-row textarea:focus {
@@ -6586,14 +6942,14 @@ const openOutputFile = async (file: OutputFile) => {
 }
 
 .panel-send-btn {
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: linear-gradient(145deg, #8b5cf6 0%, #7c3aed 100%);
   border: none;
-  border-radius: 12px;
+  border-radius: 8px;
   cursor: pointer;
   color: #fff;
   transition: all 0.2s ease;
@@ -6601,8 +6957,8 @@ const openOutputFile = async (file: OutputFile) => {
 }
 
 .panel-send-btn svg {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
 }
 
 .panel-send-btn:hover:not(:disabled) {
@@ -6616,28 +6972,29 @@ const openOutputFile = async (file: OutputFile) => {
 }
 
 .panel-quick-btn {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 8px 14px;
-  background: transparent;
-  border: 1px dashed rgba(139, 92, 246, 0.3);
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: rgba(139, 92, 246, 0.1);
+  border: none;
   border-radius: 8px;
-  font-size: 12px;
   color: #8b5cf6;
   cursor: pointer;
   transition: all 0.2s ease;
+  flex-shrink: 0;
 }
 
 .panel-quick-btn:hover {
-  background: rgba(139, 92, 246, 0.05);
-  border-color: rgba(139, 92, 246, 0.5);
+  background: rgba(139, 92, 246, 0.2);
+  transform: scale(1.05);
 }
 
 .panel-quick-btn svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
 }
 
 /* 完成状态 */
