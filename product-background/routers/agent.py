@@ -16,7 +16,8 @@ from services.file_generator import generate_output_file
 from routers.logs import (
     log_info, log_error,
     log_skill_start, log_skill_step, log_skill_success, log_skill_error,
-    log_ai_start, log_ai_done, log_file_write
+    log_ai_start, log_ai_done, log_file_write,
+    log_session_start, log_session_end
 )
 
 router = APIRouter(prefix="/api/agent", tags=["Agent"])
@@ -29,8 +30,21 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     """Chat with AI agent (non-streaming)"""
-    msg_preview = request.message[:50] + "..." if len(request.message) > 50 else request.message
-    log_info("💬 收到消息", detail=msg_preview)
+    # 记录会话上下文
+    from models.skill import Skill
+    skill_names = []
+    if request.skill_ids:
+        skills = db.query(Skill).filter(Skill.id.in_(request.skill_ids)).all()
+        skill_names = [s.name for s in skills]
+
+    log_session_start(
+        api_name="POST /agent/chat",
+        api_desc="与AI助手对话（非流式），AI会根据问题和技能给出回答",
+        source="Agent对话页面",
+        skills=skill_names if skill_names else None,
+        user_input=request.message
+    )
+
     service = AgentService(db)
     try:
         history = [{"role": m.role, "content": m.content} for m in request.history] if request.history else []
@@ -41,17 +55,31 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             skill_ids=request.skill_ids
         )
         log_ai_done(response[:100] if response else None)
+        log_session_end(True, "AI响应完成")
         return ChatResponse(message=response)
     except Exception as e:
         log_error(f"聊天失败: {str(e)[:50]}")
+        log_session_end(False, str(e)[:50])
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/chat/stream")
 async def chat_stream(request: ChatRequest, db: Session = Depends(get_db)):
     """Chat with AI agent (streaming via SSE)"""
-    msg_preview = request.message[:50] + "..." if len(request.message) > 50 else request.message
-    log_info("💬 收到消息", detail=msg_preview)
+    # 记录会话上下文
+    from models.skill import Skill
+    skill_names = []
+    if request.skill_ids:
+        skills = db.query(Skill).filter(Skill.id.in_(request.skill_ids)).all()
+        skill_names = [s.name for s in skills]
+
+    log_session_start(
+        api_name="POST /agent/chat/stream",
+        api_desc="与AI助手实时对话（流式），文字会逐字显示",
+        source="Agent对话页面",
+        skills=skill_names if skill_names else None,
+        user_input=request.message
+    )
     log_ai_start(request.message[:100])
 
     service = AgentService(db)
@@ -104,6 +132,14 @@ async def execute_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
 
     skill = db.query(Skill).filter(Skill.id == request.skill_id).first()
     skill_name = skill.name if skill else request.skill_id
+
+    # 记录执行上下文
+    log_session_start(
+        api_name="POST /agent/execute",
+        api_desc=f"执行技能脚本，运行 {skill_name} 完成具体任务",
+        source="技能执行",
+        skills=[skill_name]
+    )
 
     # 【关键】处理文件路径：将相对路径转换为绝对路径
     params = dict(request.params) if request.params else {}
@@ -170,8 +206,10 @@ async def execute_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
 
         # 日志：完成（包含结果）
         log_skill_success(skill_name, result)
+        log_session_end(True, f"技能 {skill_name} 执行成功")
     else:
         log_skill_error(skill_name, error or "未知错误")
+        log_session_end(False, error or "未知错误")
 
     return ExecuteResponse(
         success=success,
@@ -211,6 +249,14 @@ async def execute_temp_skill(request: ExecuteRequest, db: Session = Depends(get_
 
     temp_skill = TempSkill(temp_folder, config)
 
+    # 记录执行上下文
+    log_session_start(
+        api_name="POST /agent/execute-temp",
+        api_desc=f"测试临时技能，验证 {temp_skill.name} 是否正常工作",
+        source="技能测试页面",
+        skills=[temp_skill.name]
+    )
+
     # 日志：开始（包含输入参数）
     log_skill_start(f"[测试] {temp_skill.name}", request.params)
 
@@ -244,8 +290,10 @@ async def execute_temp_skill(request: ExecuteRequest, db: Session = Depends(get_
             pass
 
         log_skill_success(temp_skill.name, result)
+        log_session_end(True, f"测试技能 {temp_skill.name} 执行成功")
     else:
         log_skill_error(temp_skill.name, error or "未知错误")
+        log_session_end(False, error or "未知错误")
 
     return ExecuteResponse(
         success=success,

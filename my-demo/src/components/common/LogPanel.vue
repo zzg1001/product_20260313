@@ -31,33 +31,37 @@ const openLogWindow = () => {
   doc.write(`<!DOCTYPE html><html><head><title>运行日志</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#0f172a;font-family:-apple-system,sans-serif;font-size:13px;color:#e2e8f0}
-.header{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:#1e293b;border-bottom:1px solid #334155}
-.header-left{display:flex;align-items:center;gap:10px}
-.dot{width:8px;height:8px;border-radius:50%;background:#64748b}
-.dot.on{background:#22c55e}
-.title{font-weight:600;color:#f1f5f9}
-.count{color:#64748b;font-size:12px}
-.header-right{display:flex;gap:8px}
-.btn{background:#334155;border:none;color:#94a3b8;padding:6px 12px;border-radius:4px;cursor:pointer;font-size:12px}
-.btn:hover{background:#475569;color:#e2e8f0}
-#logs{padding:12px;height:calc(100vh - 50px);overflow-y:auto}
-#logs::-webkit-scrollbar{width:6px}
-#logs::-webkit-scrollbar-thumb{background:#475569;border-radius:3px}
-.log{padding:10px 12px;margin-bottom:6px;background:#1e293b;border-radius:6px;border-left:3px solid #3b82f6}
-.log.success{border-left-color:#22c55e}
-.log.warn{border-left-color:#f59e0b;background:rgba(245,158,11,0.08)}
-.log.error{border-left-color:#ef4444;background:rgba(239,68,68,0.08)}
-.log-header{display:flex;align-items:center;gap:8px;margin-bottom:4px}
-.log-title{flex:1;font-weight:500;color:#f1f5f9}
-.log-step{color:#64748b;font-size:11px;background:#334155;padding:2px 6px;border-radius:3px}
-.log-time{color:#64748b;font-size:11px}
-.log-detail{color:#94a3b8;font-size:12px;margin-top:6px;line-height:1.5}
-.log-data{margin-top:8px}
-.log-data summary{color:#64748b;font-size:11px;cursor:pointer;padding:4px 0}
-.log-data summary:hover{color:#94a3b8}
-.log-data pre{margin-top:6px;padding:10px 12px;background:#0f172a;border:1px solid #334155;border-radius:4px;color:#94a3b8;font-size:11px;font-family:Monaco,Consolas,monospace;line-height:1.5;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow-y:auto}
-.empty{display:flex;align-items:center;justify-content:center;height:200px;color:#64748b}
+body{background:#0a0a0a;font-family:'Cascadia Code','Fira Code','SF Mono',Monaco,Consolas,'Ubuntu Mono',monospace;font-size:11px;color:#33ff33;line-height:1.4;font-weight:300}
+.header{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#111;border-bottom:1px solid #1a3a1a}
+.header-left{display:flex;align-items:center;gap:8px}
+.dot{width:6px;height:6px;border-radius:50%;background:#444}
+.dot.on{background:#00ff00;box-shadow:0 0 6px #00ff00}
+.title{font-weight:400;color:#33ff33;font-size:11px}
+.count{color:#00aa00;font-size:10px}
+.header-right{display:flex;gap:6px}
+.btn{background:#1a1a1a;border:1px solid #1a3a1a;color:#00aa00;padding:4px 10px;border-radius:2px;cursor:pointer;font-size:10px;font-family:inherit}
+.btn:hover{background:#1a3a1a;color:#33ff33;border-color:#33ff33}
+#logs{padding:8px;height:calc(100vh - 38px);overflow-y:auto;background:#0a0a0a}
+#logs::-webkit-scrollbar{width:4px}
+#logs::-webkit-scrollbar-track{background:#0a0a0a}
+#logs::-webkit-scrollbar-thumb{background:#1a3a1a;border-radius:2px}
+#logs::-webkit-scrollbar-thumb:hover{background:#33ff33}
+.log{padding:4px 8px;margin-bottom:2px;background:transparent;border-left:2px solid #1a3a1a;font-size:11px}
+.log.success{border-left-color:#00ff00;color:#00ff00}
+.log.warn{border-left-color:#ffaa00;color:#ffaa00}
+.log.error{border-left-color:#ff3333;color:#ff3333}
+.log.section{border-left-color:#00ffff;color:#00ffff;background:#0a1a1a;padding:6px 8px;margin:8px 0 4px 0}
+.log-header{display:flex;align-items:center;gap:6px}
+.log-title{flex:1;font-weight:400}
+.log-step{color:#00aa00;font-size:9px;background:#0a1a0a;padding:1px 4px;border:1px solid #1a3a1a;border-radius:2px}
+.log-time{color:#006600;font-size:9px}
+.log-detail{color:#00bb00;font-size:10px;margin-top:2px;padding-left:12px;border-left:1px solid #1a3a1a}
+.log-data{margin-top:4px}
+.log-data summary{color:#006600;font-size:9px;cursor:pointer;padding:2px 0}
+.log-data summary:hover{color:#33ff33}
+.log-data pre{margin-top:4px;padding:6px 8px;background:#050505;border:1px solid #1a3a1a;border-radius:2px;color:#00aa00;font-size:10px;font-family:inherit;line-height:1.3;white-space:pre-wrap;word-break:break-all;max-height:150px;overflow-y:auto}
+.empty{display:flex;align-items:center;justify-content:center;height:200px;color:#006600;font-size:11px}
+.separator{color:#1a3a1a;font-size:10px;padding:4px 8px;user-select:none}
 </style></head>
 <body>
 <div class="header">

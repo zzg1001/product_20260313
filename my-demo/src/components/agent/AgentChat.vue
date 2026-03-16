@@ -5529,28 +5529,49 @@ const openOutputFile = async (file: OutputFile) => {
 }
 
 .step-result-area .execution-log summary {
-  font-size: 11px;
-  color: #a16207;
+  font-size: 10px;
+  color: #00aa00;
   cursor: pointer;
   user-select: none;
+  font-family: 'Cascadia Code', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace;
 }
 
 .step-result-area .execution-log summary:hover {
-  color: #854d0e;
+  color: #33ff33;
 }
 
 .step-result-area .execution-log pre {
   margin: 6px 0 0 0;
-  padding: 8px 10px;
-  background: rgba(255, 255, 255, 0.6);
-  border-radius: 6px;
-  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  padding: 10px 12px;
+  background: #0a0a0a;
+  border-radius: 4px;
+  border: 1px solid #1a3a1a;
+  font-family: 'Cascadia Code', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace;
   font-size: 10px;
-  color: #78350f;
+  font-weight: 300;
+  color: #33ff33;
+  line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 120px;
+  max-height: 150px;
   overflow-y: auto;
+}
+
+.step-result-area .execution-log pre::-webkit-scrollbar {
+  width: 4px;
+}
+
+.step-result-area .execution-log pre::-webkit-scrollbar-track {
+  background: #0a0a0a;
+}
+
+.step-result-area .execution-log pre::-webkit-scrollbar-thumb {
+  background: #1a3a1a;
+  border-radius: 2px;
+}
+
+.step-result-area .execution-log pre::-webkit-scrollbar-thumb:hover {
+  background: #33ff33;
 }
 
 .step-result-area .result-actions {

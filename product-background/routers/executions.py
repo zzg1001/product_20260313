@@ -7,6 +7,7 @@ from schemas.execution import (
     ExecutionStatus, StartExecutionRequest, InteractionResponse,
     WorkflowPreCheck
 )
+from routers.logs import log_session_start, log_session_end, log_info
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 
@@ -34,13 +35,41 @@ async def start_execution(
     启动工作流执行
     pre_inputs: 预收集的交互输入 {"interaction_id": value}
     """
-    print(f"[API] /workflow/{workflow_id}/start called")
+    # 获取工作流信息用于日志
+    from models.workflow import Workflow
+    from models.skill import Skill
+
+    workflow = db.query(Workflow).filter(Workflow.id == workflow_id).first()
+    workflow_name = workflow.name if workflow else workflow_id
+
+    # 获取工作流中的技能列表
+    skill_names = []
+    if workflow and workflow.nodes:
+        import json
+        nodes = json.loads(workflow.nodes) if isinstance(workflow.nodes, str) else workflow.nodes
+        skill_ids = [n.get('id') for n in nodes if n.get('type') == 'skill']
+        if skill_ids:
+            skills = db.query(Skill).filter(Skill.id.in_(skill_ids)).all()
+            skill_names = [s.name for s in skills]
+
+    log_session_start(
+        api_name="POST /executions/workflow/start",
+        api_desc=f"启动工作流 [{workflow_name}]，按顺序执行多个技能完成复杂任务",
+        source="工作流执行页面",
+        skills=skill_names if skill_names else None
+    )
+
     service = ExecutionService(db)
     try:
         pre_inputs = request.pre_inputs if request else None
-        print(f"[API] Starting execution with pre_inputs={pre_inputs}")
-        return service.start_execution(workflow_id, pre_inputs)
+        result = service.start_execution(workflow_id, pre_inputs)
+        if result.status == 'completed':
+            log_session_end(True, f"工作流 {workflow_name} 执行完成")
+        elif result.status == 'failed':
+            log_session_end(False, result.error or "执行失败")
+        return result
     except ValueError as e:
+        log_session_end(False, str(e))
         raise HTTPException(status_code=404, detail=str(e))
 
 
