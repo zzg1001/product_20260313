@@ -133,6 +133,9 @@ const isPaused = ref(false)
 const pausedMessageId = ref<number | null>(null)
 // 被删除的 skill 的 ID 列表（用于跳过其上下文）
 const deletedSkillIds = ref<Set<string>>(new Set())
+// 干净执行模式：记录哪个 messageId 的流水线需要忽略之前的运行结果
+// 只对指定的 messageId 生效，不影响其他流水线
+const cleanExecutionMessageId = ref<number | null>(null)
 
 // 文件上传
 interface UploadedFile {
@@ -195,6 +198,7 @@ const clearConversation = () => {
   pendingWorkflow.value = null
   workflowContext.value = ''
   deletedSkillIds.value.clear()
+  cleanExecutionMessageId.value = null
 
   scrollToBottom()
 }
@@ -323,7 +327,7 @@ const maxPanelHeight = 800
 // 浮动面板状态
 const isFloating = ref(false)
 const floatPosition = ref({ x: 0, y: 0 })
-const floatSize = ref({ width: 320, height: 480 })  // 2:3 比例
+const floatSize = ref({ width: 480, height: 600 })  // 4:5 比例
 const resizeStartPos = ref({ x: 0, y: 0 })
 const resizeStartSize = ref({ width: 0, height: 0 })
 const resizeStartPosition = ref({ x: 0, y: 0 })
@@ -331,6 +335,12 @@ const isDraggingPanel = ref(false)
 const dragOffset = ref({ x: 0, y: 0 })
 const magnetDistance = 80  // 磁吸距离
 const hasLeftDockArea = ref(false)  // 是否已经离开过停靠区域
+
+// 面板文件上传状态
+const panelFileInputRef = ref<HTMLInputElement | null>(null)
+const panelUploadedFiles = ref<UploadedFile[]>([])
+const panelIsDragging = ref(false)
+const panelCollectedFilePaths = ref<string[]>([])  // 收集的文件路径，执行时传递
 
 // 开始拖拽移动面板（通过头部拖拽）
 const startDragPanel = (e: MouseEvent) => {
@@ -769,15 +779,140 @@ const closeSkillExecution = (cancelled = false) => {
   // 重置浮动状态
   isFloating.value = false
   panelWidth.value = 380
+  // 清理面板上传的文件
+  panelUploadedFiles.value.forEach(f => {
+    if (f.url) URL.revokeObjectURL(f.url)
+  })
+  panelUploadedFiles.value = []
+  panelCollectedFilePaths.value = []
+}
+
+// 面板文件上传处理
+const panelHandleFileSelect = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  if (input.files) {
+    panelAddFiles(Array.from(input.files))
+  }
+  input.value = ''
+}
+
+const panelAddFiles = async (files: File[]) => {
+  console.log('[panelAddFiles] 开始添加文件:', files.map(f => f.name))
+
+  const newFiles: UploadedFile[] = files.map(file => ({
+    id: `panel-file-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    name: file.name,
+    type: file.type,
+    size: file.size,
+    url: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
+    file,
+    uploading: true
+  }))
+  panelUploadedFiles.value = [...panelUploadedFiles.value, ...newFiles]
+  console.log('[panelAddFiles] 当前文件列表:', panelUploadedFiles.value.length)
+
+  // 上传文件到服务器
+  for (const uploadedFile of newFiles) {
+    try {
+      console.log('[panelAddFiles] 开始上传:', uploadedFile.name)
+      const response = await agentApi.upload(uploadedFile.file)
+      console.log('[panelAddFiles] 上传成功:', uploadedFile.name, '-> serverPath:', response.path)
+
+      // 使用新数组触发响应式更新
+      panelUploadedFiles.value = panelUploadedFiles.value.map(f =>
+        f.id === uploadedFile.id
+          ? { ...f, serverPath: response.path, uploading: false }
+          : f
+      )
+      console.log('[panelAddFiles] 更新后的文件列表:', panelUploadedFiles.value.map(f => ({ name: f.name, serverPath: f.serverPath, uploading: f.uploading })))
+    } catch (error: any) {
+      console.error('[panelAddFiles] 上传失败:', uploadedFile.name, error)
+      panelUploadedFiles.value = panelUploadedFiles.value.map(f =>
+        f.id === uploadedFile.id
+          ? { ...f, uploading: false, uploadError: error.message || '上传失败' }
+          : f
+      )
+    }
+  }
+  console.log('[panelAddFiles] 所有文件处理完成, 文件列表:', panelUploadedFiles.value.map(f => ({ name: f.name, serverPath: f.serverPath })))
+}
+
+const panelRemoveFile = (fileId: string) => {
+  const file = panelUploadedFiles.value.find(f => f.id === fileId)
+  if (file?.url) {
+    URL.revokeObjectURL(file.url)
+  }
+  panelUploadedFiles.value = panelUploadedFiles.value.filter(f => f.id !== fileId)
+}
+
+const panelTriggerFileUpload = () => {
+  panelFileInputRef.value?.click()
+}
+
+// 面板拖拽上传事件
+const panelHandleDragEnter = (e: DragEvent) => {
+  e.preventDefault()
+  e.stopPropagation()
+  panelIsDragging.value = true
+}
+
+const panelHandleDragLeave = (e: DragEvent) => {
+  e.preventDefault()
+  e.stopPropagation()
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  const x = e.clientX
+  const y = e.clientY
+  if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+    panelIsDragging.value = false
+  }
+}
+
+const panelHandleDragOver = (e: DragEvent) => {
+  e.preventDefault()
+  e.stopPropagation()
+}
+
+const panelHandleDrop = (e: DragEvent) => {
+  e.preventDefault()
+  e.stopPropagation()
+  panelIsDragging.value = false
+
+  const files = e.dataTransfer?.files
+  if (files && files.length > 0) {
+    panelAddFiles(Array.from(files))
+  }
 }
 
 // 发送面板消息 - 多轮对话
 const sendSkillPanelMessage = async () => {
-  if (!skillPanelInput.value.trim() || skillPanelProcessing.value) return
+  const hasText = skillPanelInput.value.trim()
+  const hasFiles = panelUploadedFiles.value.length > 0
 
-  const userMessage = skillPanelInput.value.trim()
+  if ((!hasText && !hasFiles) || skillPanelProcessing.value) return
+
+  let userMessage = skillPanelInput.value.trim()
   skillPanelInput.value = ''
   skillPanelWaitingConfirm.value = false
+
+  // 如果有文件，添加文件信息到消息
+  if (hasFiles) {
+    const fileNames = panelUploadedFiles.value.map(f => f.name).join(', ')
+    const fileInfo = `[上传文件: ${fileNames}]`
+    userMessage = userMessage ? `${userMessage}\n${fileInfo}` : fileInfo
+
+    // 收集服务器路径，保存到状态中供执行时使用
+    panelUploadedFiles.value.forEach(f => {
+      if (f.serverPath && !panelCollectedFilePaths.value.includes(f.serverPath)) {
+        panelCollectedFilePaths.value.push(f.serverPath)
+      }
+    })
+
+    // 清理文件预览
+    panelUploadedFiles.value.forEach(f => {
+      if (f.url) URL.revokeObjectURL(f.url)
+    })
+    panelUploadedFiles.value = []
+  }
 
   // 添加用户消息
   skillPanelMessages.value.push({
@@ -929,6 +1064,7 @@ const executeSkillPanel = async () => {
     summary: skillPanelSummary.value,       // AI 总结
     context: combinedContext,               // 合并后的完整上下文
     skillName: executingSkill.value?.name,
+    filePaths: panelCollectedFilePaths.value.length > 0 ? [...panelCollectedFilePaths.value] : undefined,  // 上传的文件路径
     conversationHistory: skillPanelMessages.value
       .filter(m => m.role !== 'system')
       .map(m => ({ role: m.role, content: m.content }))
@@ -949,25 +1085,94 @@ const executeSkillPanel = async () => {
   // handleSkillComplete 完成后，面板已关闭，这里不需要额外操作
 }
 
-// 直接执行（使用默认配置）
-const quickExecuteSkillPanel = () => {
-  skillPanelMessages.value.push({
-    id: Date.now(),
-    role: 'user',
-    content: '使用默认配置',
-    timestamp: new Date()
-  })
-  skillPanelMessages.value.push({
-    id: Date.now() + 1,
-    role: 'assistant',
-    content: `好的，将使用默认配置执行「${executionContext.value || executingSkill.value?.name}」`,
-    timestamp: new Date()
-  })
-  scrollSkillPanelToBottom()
+// 直接执行 - 跳过面板AI对话，直接带输入和文件执行
+const quickExecuteSkillPanel = async () => {
+  console.log('========== [quickExecuteSkillPanel] 开始直接执行 ==========')
 
-  setTimeout(() => {
-    executeSkillPanel()
-  }, 500)
+  // 设置干净执行模式，只对当前流水线（messageId）生效
+  const stepInfo = executingStepInfo.value
+  if (stepInfo) {
+    cleanExecutionMessageId.value = stepInfo.messageId
+  }
+
+  // 先复制一份文件列表，防止被清空
+  const currentFiles = [...panelUploadedFiles.value]
+  console.log('[quickExecuteSkillPanel] 当前面板文件数量:', currentFiles.length)
+  console.log('[quickExecuteSkillPanel] 当前面板文件详情:', JSON.stringify(currentFiles.map(f => ({
+    name: f.name,
+    serverPath: f.serverPath,
+    uploading: f.uploading
+  })), null, 2))
+  console.log('[quickExecuteSkillPanel] 输入框内容:', skillPanelInput.value)
+
+  // 检查是否有文件正在上传
+  const uploadingFiles = currentFiles.filter(f => f.uploading)
+  if (uploadingFiles.length > 0) {
+    console.log('[quickExecuteSkillPanel] 还有文件在上传中:', uploadingFiles.length)
+    alert('请等待文件上传完成')
+    return
+  }
+
+  // 收集输入框内容
+  const inputText = skillPanelInput.value.trim()
+  skillPanelInput.value = ''
+
+  // 收集上传的文件路径（从复制的列表中）
+  const filePaths: string[] = []
+  currentFiles.forEach(f => {
+    if (f.serverPath) {
+      filePaths.push(f.serverPath)
+      console.log('[quickExecuteSkillPanel] ✓ 收集文件:', f.name, '->', f.serverPath)
+    } else {
+      console.log('[quickExecuteSkillPanel] ✗ 文件没有serverPath:', f.name)
+    }
+  })
+
+  // 清理文件预览
+  panelUploadedFiles.value.forEach(f => {
+    if (f.url) URL.revokeObjectURL(f.url)
+  })
+  panelUploadedFiles.value = []
+
+  console.log('[quickExecuteSkillPanel] 收集到的文件路径:', JSON.stringify(filePaths))
+
+  // 直接执行时：保留原始上下文 + 面板新输入，但明确告知 AI 忽略之前的运行结果
+  // executionContext.value = 原始用户请求（如"帮我生成一个卖花的商城网页"）
+  const cleanExecutionHint = '【重要提示】这是一次全新的独立执行，请完全忽略之前任何执行产生的数据、JSON、文件或结果。只使用本次提供的输入文件和参数。'
+
+  const combinedContext = [
+    cleanExecutionHint,      // 添加清洁执行提示
+    executionContext.value,  // 保留原始上下文
+    inputText                // 面板新输入
+  ].filter(Boolean).join('\n\n')
+
+  // 构建参数
+  const finalParams = {
+    userRequirements: inputText ? [inputText] : [],
+    context: combinedContext,
+    skillName: executingSkill.value?.name,
+    filePaths: filePaths.length > 0 ? filePaths : undefined,
+    quickExecute: true,  // 标记为直接执行
+    cleanExecution: true // 标记为干净执行，忽略之前的结果
+  }
+
+  console.log('[quickExecuteSkillPanel] finalParams:', JSON.stringify(finalParams, null, 2))
+  console.log('[quickExecuteSkillPanel] finalParams.filePaths:', JSON.stringify(finalParams.filePaths))
+
+  // 保存到全局变量供调试
+  ;(window as any).__quickExecuteParams = finalParams
+  ;(window as any).__quickExecuteFilePaths = filePaths
+
+  console.log('[quickExecuteSkillPanel] 即将调用 handleSkillComplete...')
+
+  // 直接调用 handleSkillComplete，跳过面板AI对话
+  await handleSkillComplete({
+    success: true,
+    output: inputText || '直接执行',
+    params: finalParams
+  })
+
+  console.log('[quickExecuteSkillPanel] handleSkillComplete 调用完成')
 }
 
 // 滚动面板到底部
@@ -992,7 +1197,18 @@ const renderPanelMarkdown = (text: string): string => {
 
 // 技能执行完成 - 更新步骤状态并继续执行
 const handleSkillComplete = async (result: { success: boolean; output?: string; params?: Record<string, any> }) => {
+  console.log('========== [handleSkillComplete] 开始 ==========')
+  console.log('[handleSkillComplete] 接收到的 result:', JSON.stringify(result, null, 2))
+  console.log('[handleSkillComplete] result.params:', result.params)
+  console.log('[handleSkillComplete] result.params?.filePaths:', result.params?.filePaths)
+
   const stepInfo = executingStepInfo.value
+  console.log('[handleSkillComplete] stepInfo:', stepInfo)
+
+  if (!stepInfo) {
+    console.error('[handleSkillComplete] ⚠️ stepInfo 为空！无法执行技能。请确保从主对话框的技能步骤点击进入面板。')
+  }
+
   closeSkillExecution()
 
   if (result.success && stepInfo) {
@@ -1010,20 +1226,41 @@ const handleSkillComplete = async (result: { success: boolean; output?: string; 
         // 调用后端 API 实际执行 skill
         try {
           if (step.skillId) {
-            const filePaths = getContextFilePaths()
+            // 文件路径：只使用面板上传的文件，不再使用主对话框的旧文件
+            const panelFilePaths = result.params?.filePaths || []
+            // 直接执行时不使用上下文文件（之前生成的文档不算上下文）
+            const isQuickExecute = result.params?.quickExecute === true
+            const finalFilePaths = panelFilePaths  // 只用面板文件
+
             // 优先使用交互面板中的 context，其次使用用户查询，最后使用技能描述
             const contextValue = result.params?.context || lastUserQuery.value || step.description || ''
-            const params = {
-              ...(result.params || {}),
+
+            // 构建参数，不包含旧的文件
+            const params: Record<string, any> = {
               context: contextValue,
               skillDescription: step.description,
-              ...(filePaths.length > 0 ? {
-                file_path: filePaths[0],
-                file_paths: filePaths
-              } : {})
+              userRequirements: result.params?.userRequirements
             }
 
-            console.log(`[handleSkillComplete] Executing skill "${step.skillName}" with context:`, contextValue)
+            // 只有面板有文件时才添加文件参数
+            if (finalFilePaths.length > 0) {
+              params.file_path = finalFilePaths[0]
+              params.file_paths = finalFilePaths
+            }
+
+            console.log(`[handleSkillComplete] Executing skill "${step.skillName}"`)
+            console.log(`[handleSkillComplete] isQuickExecute:`, isQuickExecute)
+            console.log(`[handleSkillComplete] Context value:`, contextValue)
+            console.log(`[handleSkillComplete] Panel files (only these will be used):`, JSON.stringify(panelFilePaths))
+            console.log(`[handleSkillComplete] Final files:`, JSON.stringify(finalFilePaths))
+            console.log(`[handleSkillComplete] params.file_path:`, params.file_path)
+            console.log(`[handleSkillComplete] params.file_paths:`, JSON.stringify(params.file_paths))
+            console.log(`[handleSkillComplete] 发送到API的完整 params:`, JSON.stringify(params, null, 2))
+            console.log('========== [handleSkillComplete] 调用API ==========')
+
+            // 调试：保存到全局变量
+            ;(window as any).__lastSkillParams = params
+            ;(window as any).__lastPanelFiles = panelFilePaths
 
             const response = await agentApi.execute({
               skill_id: step.skillId,
@@ -1077,6 +1314,27 @@ const handleSkillComplete = async (result: { success: boolean; output?: string; 
         }
 
         scrollToBottom()
+      }
+
+      // 如果是"直接执行"（cleanExecution），清除后续节点的 userInput
+      // 这样后续节点不会使用旧的上下文数据
+      if (result.params?.cleanExecution && msg.pipelineEdges && step.nodeId) {
+        const clearSuccessorUserInput = (nodeId: string) => {
+          // 找到所有从当前节点出发的边
+          msg.pipelineEdges!.forEach(e => {
+            if (e.from === nodeId) {
+              const successorStep = msg.skillPlan!.find(s => s.nodeId === e.to)
+              if (successorStep && successorStep.status === 'pending') {
+                // 清除后续节点的 userInput，让它使用新的上下文
+                successorStep.userInput = undefined
+                console.log(`[handleSkillComplete] 清除后续节点 "${successorStep.skillName}" 的 userInput`)
+                // 递归清除更后面的节点
+                clearSuccessorUserInput(e.to)
+              }
+            }
+          })
+        }
+        clearSuccessorUserInput(step.nodeId)
       }
 
       // 继续执行后续步骤
@@ -1905,7 +2163,11 @@ const executeSkills = async (messageId: number, skills: SkillStep[], startIndex:
 
         // 安全解析 userInput
         let baseParams: Record<string, any> = {}
-        if (step.userInput) {
+
+        // 如果是干净执行模式，忽略旧的 userInput，使用全新的上下文
+        const isCleanMode = cleanExecutionMessageId.value === messageId
+
+        if (!isCleanMode && step.userInput) {
           try {
             baseParams = JSON.parse(step.userInput)
           } catch (e) {
@@ -1913,8 +2175,16 @@ const executeSkills = async (messageId: number, skills: SkillStep[], startIndex:
           }
         }
 
-        // 获取上下文：优先 userInput 里的 context，其次用户查询，最后技能描述
-        const contextValue = baseParams.context || lastUserQuery.value || step.description || ''
+        // 获取上下文：干净模式只用用户查询，否则优先 baseParams.context
+        let contextValue = isCleanMode
+          ? (lastUserQuery.value || step.description || '')
+          : (baseParams.context || lastUserQuery.value || step.description || '')
+
+        // 如果是干净执行模式，在 context 前面添加提示
+        if (isCleanMode) {
+          const cleanHint = '【重要提示】这是一次全新的独立执行，请完全忽略之前任何执行产生的数据、JSON、文件或结果。只使用本次提供的输入文件和参数。\n\n'
+          contextValue = cleanHint + contextValue
+        }
 
         const params = {
           ...baseParams,
@@ -1995,6 +2265,10 @@ const executeSkills = async (messageId: number, skills: SkillStep[], startIndex:
   }
   pendingExecution.value = null
   isProcessing.value = false
+  // 重置干净执行模式（只重置当前 messageId 的）
+  if (cleanExecutionMessageId.value === messageId) {
+    cleanExecutionMessageId.value = null
+  }
 }
 
 // 按拓扑层级并行执行技能
@@ -2059,36 +2333,42 @@ const executeSkillsParallel = async (messageId: number) => {
       if (inDegree[nodeId] === 0) {
         const step = nodeToStep.get(nodeId)
         if (step) {
-          currentBatch.push(step)
+          // 只有 pending 状态的才需要执行，已完成的跳过但仍要更新入度
+          if (step.status === 'pending') {
+            currentBatch.push(step)
+          }
+          // 所有入度为0的都要加入 toProcess，以便更新后续节点的入度
           toProcess.push(nodeId)
         }
       }
     })
 
-    if (currentBatch.length === 0) {
-      // 防止死循环
+    if (toProcess.length === 0) {
+      // 没有任何可处理的节点，防止死循环
       break
     }
 
-    // 检查是否有缺失的技能
-    const missingStep = currentBatch.find(step => step.status === 'missing' || !isSkillInstalled(step.skillName))
-    if (missingStep) {
-      missingStep.status = 'missing'
-      msg.waitingForSkill = missingStep.skillName
-      pendingExecution.value = { messageId, skills: steps }
-      isProcessing.value = false
+    // 如果有需要执行的步骤
+    if (currentBatch.length > 0) {
+      // 检查是否有缺失的技能
+      const missingStep = currentBatch.find(step => step.status === 'missing' || !isSkillInstalled(step.skillName))
+      if (missingStep) {
+        missingStep.status = 'missing'
+        msg.waitingForSkill = missingStep.skillName
+        pendingExecution.value = { messageId, skills: steps }
+        isProcessing.value = false
+        scrollToBottom()
+        return
+      }
+
+      // 并行执行当前批次
+      currentBatch.forEach(step => {
+        step.status = 'running'
+      })
       scrollToBottom()
-      return
-    }
 
-    // 并行执行当前批次
-    currentBatch.forEach(step => {
-      step.status = 'running'
-    })
-    scrollToBottom()
-
-    // 并行执行技能（调用真实 API）
-    await Promise.all(currentBatch.map(async (step) => {
+      // 并行执行技能（调用真实 API）
+      await Promise.all(currentBatch.map(async (step) => {
       try {
         if (step.skillId) {
           // 构建参数：包含用户输入、原始上下文和文件路径
@@ -2119,7 +2399,11 @@ const executeSkillsParallel = async (messageId: number) => {
 
           // 安全解析 userInput
           let baseParams: Record<string, any> = {}
-          if (step.userInput) {
+
+          // 如果是干净执行模式，忽略旧的 userInput，使用全新的上下文
+          const isCleanMode = cleanExecutionMessageId.value === messageId
+
+          if (!isCleanMode && step.userInput) {
             try {
               baseParams = JSON.parse(step.userInput)
             } catch (e) {
@@ -2127,13 +2411,25 @@ const executeSkillsParallel = async (messageId: number) => {
             }
           }
 
-          // 获取上下文：优先 baseParams.context，其次用户查询，最后技能描述
-          const contextValue = baseParams.context || lastUserQuery.value || step.description || ''
+          // 获取上下文：干净模式只用用户查询，否则优先 baseParams.context
+          let contextValue = isCleanMode
+            ? (lastUserQuery.value || step.description || '')
+            : (baseParams.context || lastUserQuery.value || step.description || '')
+
+          // 如果是干净执行模式，在 context 前面添加提示
+          if (isCleanMode) {
+            const cleanHint = '【重要提示】这是一次全新的独立执行，请完全忽略之前任何执行产生的数据、JSON、文件或结果。只使用本次提供的输入文件和参数。\n\n'
+            contextValue = cleanHint + contextValue
+          }
+          console.log(`[Skill Parallel] isCleanMode:`, isCleanMode)
           console.log(`[Skill Parallel] Context for "${step.skillName}":`, contextValue)
 
-          // 合并文件路径：前驱输出 + 用户上传
-          const allFilePaths = [...predecessorFiles, ...filePaths]
+          // 合并文件路径：
+          // - 如果有前驱输出，优先使用前驱输出（不需要用户上传的原始文件）
+          // - 如果没有前驱输出，才使用用户上传的文件
+          const allFilePaths = predecessorFiles.length > 0 ? predecessorFiles : filePaths
           console.log(`[Skill Parallel] All file paths for "${step.skillName}":`, allFilePaths)
+          console.log(`[Skill Parallel] Using predecessor files only:`, predecessorFiles.length > 0)
 
           const params = {
             ...baseParams,
@@ -2213,10 +2509,11 @@ const executeSkillsParallel = async (messageId: number) => {
           error: error.message || '未知错误'
         }
       }
-    }))
-    scrollToBottom()
+      }))
+      scrollToBottom()
+    }
 
-    // 移除已完成的节点，更新入度
+    // 移除已处理的节点，更新入度（无论是否执行了技能都要更新）
     toProcess.forEach(nodeId => {
       remaining.delete(nodeId)
       const children = adj[nodeId]
@@ -2236,6 +2533,10 @@ const executeSkillsParallel = async (messageId: number) => {
   }
   pendingExecution.value = null
   isProcessing.value = false
+  // 重置干净执行模式（只重置当前 messageId 的）
+  if (cleanExecutionMessageId.value === messageId) {
+    cleanExecutionMessageId.value = null
+  }
 }
 
 // 跳转到 Skills 页面添加技能
@@ -3680,8 +3981,26 @@ const openOutputFile = async (file: OutputFile) => {
             </div>
           </header>
 
-          <!-- 对话区域 -->
-          <main class="panel-chat-area" ref="skillPanelChatRef">
+          <!-- 对话区域（支持拖拽上传） -->
+          <main
+            class="panel-chat-area"
+            ref="skillPanelChatRef"
+            @dragenter="panelHandleDragEnter"
+            @dragleave="panelHandleDragLeave"
+            @dragover="panelHandleDragOver"
+            @drop="panelHandleDrop"
+            :class="{ 'is-drag-over': panelIsDragging }"
+          >
+            <!-- 拖拽上传提示 -->
+            <div v-if="panelIsDragging" class="panel-drop-overlay">
+              <div class="panel-drop-hint">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M20 16v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                <span>释放文件以上传</span>
+              </div>
+            </div>
             <TransitionGroup name="msg-fade" tag="div" class="panel-messages">
               <div
                 v-for="msg in skillPanelMessages"
@@ -3766,8 +4085,36 @@ const openOutputFile = async (file: OutputFile) => {
 
               <!-- 输入状态 -->
               <div v-else key="input" class="panel-input-area">
+                <!-- 隐藏的文件输入 -->
+                <input
+                  ref="panelFileInputRef"
+                  type="file"
+                  multiple
+                  accept=".xlsx,.xls,.csv,.json,.txt,.png,.jpg,.jpeg,.gif,.pdf"
+                  style="display: none"
+                  @change="panelHandleFileSelect"
+                />
+
+                <!-- 已上传文件预览 -->
+                <div v-if="panelUploadedFiles.length > 0" class="panel-files-preview">
+                  <div
+                    v-for="file in panelUploadedFiles"
+                    :key="file.id"
+                    class="panel-file-item"
+                    :class="{ 'is-uploading': file.uploading, 'has-error': file.uploadError }"
+                  >
+                    <span class="panel-file-icon">{{ file.type.startsWith('image/') ? '🖼️' : '📄' }}</span>
+                    <span class="panel-file-name">{{ file.name }}</span>
+                    <button class="panel-file-remove" @click="panelRemoveFile(file.id)" title="移除">
+                      <svg viewBox="0 0 16 16" fill="none">
+                        <path d="M12 4L4 12M4 4l8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
                 <div class="panel-input-row">
-                  <!-- 跳过配置按钮（放在输入框前面） -->
+                  <!-- 跳过配置按钮 -->
                   <button
                     v-if="!skillPanelProcessing && skillPanelMessages.length <= 1"
                     class="panel-quick-btn"
@@ -3778,10 +4125,23 @@ const openOutputFile = async (file: OutputFile) => {
                       <path d="M8.5 1L3 9h4.5l-.5 6 5.5-8H8l.5-6z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
                   </button>
+
+                  <!-- 上传按钮 -->
+                  <button
+                    class="panel-upload-btn"
+                    @click="panelTriggerFileUpload"
+                    :disabled="skillPanelProcessing"
+                    title="上传文件"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                    </svg>
+                  </button>
+
                   <textarea
                     ref="skillPanelInputRef"
                     v-model="skillPanelInput"
-                    placeholder="输入需求..."
+                    placeholder="输入需求或拖拽文件..."
                     @keydown.enter.exact.prevent="sendSkillPanelMessage"
                     :disabled="skillPanelProcessing"
                     rows="1"
@@ -3789,7 +4149,7 @@ const openOutputFile = async (file: OutputFile) => {
                   <button
                     class="panel-send-btn"
                     @click="sendSkillPanelMessage"
-                    :disabled="!skillPanelInput.trim() || skillPanelProcessing"
+                    :disabled="(!skillPanelInput.trim() && panelUploadedFiles.length === 0) || skillPanelProcessing"
                   >
                     <svg viewBox="0 0 24 24" fill="none">
                       <path d="M5 12h14M12 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -6900,56 +7260,62 @@ const openOutputFile = async (file: OutputFile) => {
 
 /* 底部输入区 */
 .panel-footer {
-  padding: 8px 12px 10px;
-  border-top: 1px solid rgba(0, 0, 0, 0.05);
-  background: rgba(248, 250, 252, 0.6);
+  padding: 14px 16px;
+  border-top: 1px solid #e5e7eb;
+  background: #fff;
 }
 
 .panel-input-area {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
+/* 面板输入框容器 - 与主聊天风格一致 */
 .panel-input-row {
   display: flex;
-  gap: 6px;
-  align-items: center;
+  align-items: flex-end;
+  gap: 10px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 4px 4px 4px 6px;
+  transition: all 0.2s ease;
+}
+
+.panel-input-row:focus-within {
+  border-color: #8b5cf6;
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+  background: #fff;
 }
 
 .panel-input-row textarea {
   flex: 1;
-  padding: 6px 10px;
-  border: 1px solid rgba(139, 92, 246, 0.2);
-  border-radius: 8px;
-  font-size: 12px;
-  font-family: inherit;
-  resize: none;
+  background: transparent;
+  border: none;
   outline: none;
-  background: #fff;
-  transition: all 0.2s ease;
-  min-height: 32px;
-  max-height: 60px;
-}
-
-.panel-input-row textarea:focus {
-  border-color: rgba(139, 92, 246, 0.5);
-  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+  color: #111827;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 8px 0;
+  resize: none;
+  max-height: 100px;
 }
 
 .panel-input-row textarea::placeholder {
-  color: #94a3b8;
+  color: #9ca3af;
 }
 
 .panel-send-btn {
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(145deg, #8b5cf6 0%, #7c3aed 100%);
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
   cursor: pointer;
   color: #fff;
   transition: all 0.2s ease;
@@ -6957,17 +7323,17 @@ const openOutputFile = async (file: OutputFile) => {
 }
 
 .panel-send-btn svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
 }
 
 .panel-send-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.35);
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
 }
 
 .panel-send-btn:disabled {
-  opacity: 0.4;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
@@ -6975,26 +7341,170 @@ const openOutputFile = async (file: OutputFile) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   padding: 0;
-  background: rgba(139, 92, 246, 0.1);
+  background: transparent;
   border: none;
   border-radius: 8px;
-  color: #8b5cf6;
+  color: #9ca3af;
   cursor: pointer;
   transition: all 0.2s ease;
   flex-shrink: 0;
 }
 
 .panel-quick-btn:hover {
-  background: rgba(139, 92, 246, 0.2);
-  transform: scale(1.05);
+  background: rgba(139, 92, 246, 0.1);
+  color: #8b5cf6;
 }
 
 .panel-quick-btn svg {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
+}
+
+/* 面板上传按钮 - 与主聊天风格一致 */
+.panel-upload-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.panel-upload-btn:hover:not(:disabled) {
+  background: rgba(139, 92, 246, 0.1);
+  color: #8b5cf6;
+}
+
+.panel-upload-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.panel-upload-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* 面板拖拽上传覆盖层 */
+.panel-chat-area.is-drag-over {
+  position: relative;
+}
+
+.panel-drop-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(139, 92, 246, 0.1);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  border: 2px dashed #8b5cf6;
+  border-radius: 8px;
+  margin: 8px;
+}
+
+.panel-drop-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: #8b5cf6;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.panel-drop-hint svg {
+  width: 32px;
+  height: 32px;
+}
+
+/* 面板已上传文件预览 - 与主聊天风格一致 */
+.panel-files-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  margin-bottom: 8px;
+}
+
+.panel-file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 12px;
+  max-width: 180px;
+  transition: all 0.2s ease;
+}
+
+.panel-file-item:hover {
+  border-color: #d1d5db;
+}
+
+.panel-file-item.is-uploading {
+  opacity: 0.6;
+}
+
+.panel-file-item.has-error {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #ef4444;
+}
+
+.panel-file-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.panel-file-name {
+  color: #374151;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.panel-file-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: #9ca3af;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+
+.panel-file-remove:hover {
+  background: #fee2e2;
+  color: #ef4444;
+}
+
+.panel-file-remove svg {
+  width: 12px;
+  height: 12px;
 }
 
 /* 完成状态 */

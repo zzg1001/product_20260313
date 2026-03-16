@@ -173,6 +173,16 @@ async def execute_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
     # 日志：开始（包含输入参数）
     log_skill_start(skill_name, params)
 
+    # 调试：打印完整参数
+    print(f"\n========== [Execute Skill] ==========")
+    print(f"[Execute] skill_id: {request.skill_id}")
+    print(f"[Execute] skill_name: {skill_name}")
+    print(f"[Execute] params keys: {list(params.keys()) if params else 'None'}")
+    print(f"[Execute] file_path: {params.get('file_path', 'NOT SET')}")
+    print(f"[Execute] file_paths: {params.get('file_paths', 'NOT SET')}")
+    print(f"[Execute] Full params: {params}")
+    print(f"======================================\n")
+
     service = AgentService(db)
     log_skill_step(skill_name, "执行脚本", detail=f"script: {request.script_name}")
 

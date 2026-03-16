@@ -231,6 +231,17 @@ If no suitable skills are found, return an empty plan with an explanation."""
         """
         import traceback
 
+        # ========== 调试日志 ==========
+        print(f"\n========== [AgentService.execute_skill] ==========")
+        print(f"[AgentService] skill_id: {skill_id}")
+        print(f"[AgentService] script_name: {script_name}")
+        print(f"[AgentService] params type: {type(params)}")
+        print(f"[AgentService] params keys: {list(params.keys()) if params else 'None'}")
+        print(f"[AgentService] file_path: {params.get('file_path', 'NOT SET') if params else 'NO PARAMS'}")
+        print(f"[AgentService] file_paths: {params.get('file_paths', 'NOT SET') if params else 'NO PARAMS'}")
+        print(f"[AgentService] Full params: {params}")
+        print(f"==================================================\n")
+
         skill = self.db.query(Skill).filter(Skill.id == skill_id).first()
         if not skill:
             log_error(f"技能不存在: {skill_id}")
@@ -311,6 +322,9 @@ If no suitable skills are found, return an empty plan with an explanation."""
 
                 # 调用 main(params) 函数
                 if "main" in exec_globals and callable(exec_globals["main"]):
+                    print(f"\n[AgentService] Calling main() with params:")
+                    print(f"[AgentService] file_path: {(params or {}).get('file_path', 'NOT SET')}")
+                    print(f"[AgentService] file_paths: {(params or {}).get('file_paths', 'NOT SET')}")
                     result = exec_globals["main"](params or {})
                     exec_globals["result"] = result
 
@@ -389,6 +403,15 @@ If no suitable skills are found, return an empty plan with an explanation."""
         让 AI 根据指南和用户需求来完成任务。
         """
         try:
+            # ========== 调试日志 ==========
+            print(f"\n========== [_execute_skill_with_ai] ==========")
+            print(f"[AI Execute] skill.name: {skill.name}")
+            print(f"[AI Execute] skill_folder: {skill_folder}")
+            print(f"[AI Execute] params: {params}")
+            print(f"[AI Execute] file_path in params: {params.get('file_path', 'NOT SET') if params else 'NO PARAMS'}")
+            print(f"[AI Execute] file_paths in params: {params.get('file_paths', 'NOT SET') if params else 'NO PARAMS'}")
+            print(f"===============================================\n")
+
             # 读取 SKILL.md
             skill_md_path = skill_folder / "SKILL.md"
             skill_md_content = skill_md_path.read_text(encoding="utf-8")
@@ -504,6 +527,14 @@ If no suitable skills are found, return an empty plan with an explanation."""
         这适用于 AI 自动规划的技能（只有名称和描述，没有实际代码）
         """
         try:
+            # ========== 调试日志 ==========
+            print(f"\n========== [_execute_skill_with_ai_fallback] ==========")
+            print(f"[AI Fallback] skill.name: {skill.name}")
+            print(f"[AI Fallback] params: {params}")
+            print(f"[AI Fallback] file_path in params: {params.get('file_path', 'NOT SET') if params else 'NO PARAMS'}")
+            print(f"[AI Fallback] file_paths in params: {params.get('file_paths', 'NOT SET') if params else 'NO PARAMS'}")
+            print(f"=======================================================\n")
+
             # 获取用户上下文
             context = params.get("context", "") if params else ""
             skill_description = params.get("skillDescription", "") if params else ""
@@ -514,6 +545,8 @@ If no suitable skills are found, return an empty plan with an explanation."""
             file_path = params.get("file_path", "") if params else ""
             if file_path and file_path not in file_paths:
                 file_paths.append(file_path)
+
+            print(f"[AI Fallback] Final file_paths after merge: {file_paths}")
 
             log_ai_start()
 
@@ -641,14 +674,15 @@ If no suitable skills are found, return an empty plan with an explanation."""
 # ========== 自动生成的 API 包装 ==========
 def main(params):
     import json
-    files = params.get('files', [])
+    # 兼容两种字段名：file_paths (前端传递) 和 files (旧格式)
+    file_paths = params.get('file_paths', []) or params.get('files', [])
     file_path = params.get('file_path', '')
 
     print(f"[AutoWrapper] params: {{params}}")
-    print(f"[AutoWrapper] files: {{files}}, file_path: {{file_path}}")
+    print(f"[AutoWrapper] file_paths: {{file_paths}}, file_path: {{file_path}}")
 
-    if files:
-        input_file = files[0]
+    if file_paths:
+        input_file = file_paths[0]
     elif file_path:
         input_file = file_path
     else:
