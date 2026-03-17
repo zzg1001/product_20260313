@@ -87,6 +87,9 @@ class AgentService:
 如果识别到任务请求，在回复末尾添加：
 <!--SKILL_PLAN:[{{"skill":"技能名","action":"操作描述","exists":true/false}}]-->
 
+## 多文件处理规则
+**重要**：当用户上传多个文件时，同一类型的文件应由**同一个技能**一次性处理，不要为每个文件创建单独的步骤。
+
 ## 回复格式
 - 使用 Markdown：**粗体**、`代码`、列表
 - 简洁专业，中文回复"""
@@ -148,6 +151,12 @@ class AgentService:
 点击下方流程即可开始执行。
 
 <!--SKILL_PLAN:[{{"skill":"data-processor","action":"读取销售数据","exists":true}},{{"skill":"data-analyzer","action":"统计分析","exists":false}},{{"skill":"report-generator","action":"生成报告","exists":false}}]-->
+
+## 多文件处理规则
+**重要**：当用户上传多个文件时：
+- 同一类型的文件应由**同一个技能**一次性处理（技能会接收所有文件路径）
+- 不要为每个文件创建单独的技能步骤
+- 例如：用户上传4个Excel文件要求分析，只需要1个 `data-understanding` 技能，不是4个
 
 ## 回复格式
 - 使用 Markdown：**粗体**、`代码`、列表
@@ -507,6 +516,19 @@ If no suitable skills are found, return an empty plan with an explanation."""
             if output_lower.startswith("<!doctype") or output_lower.startswith("<html"):
                 # HTML 输出
                 result["_html"] = ai_output
+            elif output_lower.startswith("#") or "markdown" in (skill.description or "").lower():
+                # Markdown 输出 - 直接生成文件
+                filename = generate_unique_filename(skill.name, "md")
+                filepath = OUTPUTS_DIR / filename
+                filepath.write_text(ai_output, encoding="utf-8")
+                file_size = filepath.stat().st_size
+                result["_output_file"] = {
+                    "path": str(filepath),
+                    "type": "md",
+                    "name": filename,
+                    "url": f"/outputs/{filename}",
+                    "size": file_size
+                }
 
             return True, result, None, ai_output
 
@@ -614,6 +636,19 @@ If no suitable skills are found, return an empty plan with an explanation."""
             output_lower = ai_output.strip().lower()
             if output_lower.startswith("<!doctype") or output_lower.startswith("<html"):
                 result["_html"] = ai_output
+            elif output_lower.startswith("#") or "markdown" in (skill.description or "").lower() or "报告" in (skill.description or ""):
+                # Markdown 输出 - 直接生成文件
+                filename = generate_unique_filename(skill.name, "md")
+                filepath = OUTPUTS_DIR / filename
+                filepath.write_text(ai_output, encoding="utf-8")
+                file_size = filepath.stat().st_size
+                result["_output_file"] = {
+                    "path": str(filepath),
+                    "type": "md",
+                    "name": filename,
+                    "url": f"/outputs/{filename}",
+                    "size": file_size
+                }
 
             return True, result, None, ai_output
 
@@ -726,13 +761,26 @@ def main(params):
 '''
         return code + wrapper
 
-    def _read_files_for_ai(self, file_paths: list) -> str:
+    def _read_files_for_ai(self, file_paths: list, max_total_chars: int = 150000) -> str:
         """
         读取上传的文件内容，转换为 AI 可以处理的文本格式
+
+        Args:
+            file_paths: 文件路径列表
+            max_total_chars: 总字符数限制（默认150000，约50k tokens，留出余量给system prompt）
         """
         contents = []
+        total_chars = 0
+
+        # 根据文件数量动态调整每个文件的限制
+        num_files = len(file_paths)
+        per_file_limit = max(5000, max_total_chars // max(num_files, 1))
 
         for file_path in file_paths:
+            # 检查是否已超过总限制
+            if total_chars >= max_total_chars:
+                contents.append(f"\n[已达到总字符限制，跳过剩余 {len(file_paths) - len(contents)} 个文件]")
+                break
             try:
                 path = Path(file_path)
                 if not path.exists():
@@ -740,16 +788,23 @@ def main(params):
 
                 suffix = path.suffix.lower()
 
+                # 计算当前文件可用的字符数
+                remaining_chars = max_total_chars - total_chars
+                file_limit = min(per_file_limit, remaining_chars)
+
+                file_content = ""
+
                 # Excel 文件
                 if suffix in ['.xlsx', '.xls']:
                     try:
                         df = pd.read_excel(file_path)
-                        # 限制行数避免 token 过多
-                        if len(df) > 500:
-                            df = df.head(500)
-                            contents.append(f"### {path.name} (前500行)\n```\n{df.to_string()}\n```")
+                        # 动态限制行数
+                        max_rows = min(200, max(50, file_limit // 200))  # 估算每行约200字符
+                        if len(df) > max_rows:
+                            df = df.head(max_rows)
+                            file_content = f"### {path.name} (前{max_rows}行，共{len(df)}行)\n```\n{df.to_string()}\n```"
                         else:
-                            contents.append(f"### {path.name}\n```\n{df.to_string()}\n```")
+                            file_content = f"### {path.name}\n```\n{df.to_string()}\n```"
                     except Exception:
                         pass
 
@@ -757,11 +812,12 @@ def main(params):
                 elif suffix == '.csv':
                     try:
                         df = pd.read_csv(file_path)
-                        if len(df) > 500:
-                            df = df.head(500)
-                            contents.append(f"### {path.name} (前500行)\n```\n{df.to_string()}\n```")
+                        max_rows = min(200, max(50, file_limit // 200))
+                        if len(df) > max_rows:
+                            df = df.head(max_rows)
+                            file_content = f"### {path.name} (前{max_rows}行，共{len(df)}行)\n```\n{df.to_string()}\n```"
                         else:
-                            contents.append(f"### {path.name}\n```\n{df.to_string()}\n```")
+                            file_content = f"### {path.name}\n```\n{df.to_string()}\n```"
                     except Exception:
                         pass
 
@@ -772,9 +828,9 @@ def main(params):
                         with open(file_path, 'r', encoding='utf-8') as f:
                             data = json.load(f)
                         json_str = json.dumps(data, ensure_ascii=False, indent=2)
-                        if len(json_str) > 10000:
-                            json_str = json_str[:10000] + "\n...[truncated]..."
-                        contents.append(f"### {path.name}\n```json\n{json_str}\n```")
+                        if len(json_str) > file_limit:
+                            json_str = json_str[:file_limit] + "\n...[truncated]..."
+                        file_content = f"### {path.name}\n```json\n{json_str}\n```"
                     except Exception:
                         pass
 
@@ -782,19 +838,29 @@ def main(params):
                 elif suffix in ['.txt', '.md', '.py', '.js', '.html', '.css']:
                     try:
                         text = path.read_text(encoding='utf-8')
-                        if len(text) > 10000:
-                            text = text[:10000] + "\n...[truncated]..."
-                        contents.append(f"### {path.name}\n```\n{text}\n```")
+                        if len(text) > file_limit:
+                            text = text[:file_limit] + "\n...[truncated]..."
+                        file_content = f"### {path.name}\n```\n{text}\n```"
                     except Exception:
                         pass
 
                 else:
-                    contents.append(f"### {path.name}\n[不支持的文件类型: {suffix}]")
+                    file_content = f"### {path.name}\n[不支持的文件类型: {suffix}]"
+
+                # 添加内容并更新计数
+                if file_content:
+                    contents.append(file_content)
+                    total_chars += len(file_content)
 
             except Exception:
                 pass
 
-        return "\n\n".join(contents)
+        # 添加截断提示
+        result = "\n\n".join(contents)
+        if total_chars >= max_total_chars * 0.9:  # 接近限制时提示
+            result += f"\n\n[注意：文件内容已截断以避免超过处理限制。总计 {total_chars} 字符，{len(file_paths)} 个文件]"
+
+        return result
 
     def execute_temp_skill(
         self,
