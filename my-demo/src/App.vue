@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { RouterView } from 'vue-router'
 import LogPanel from '@/components/common/LogPanel.vue'
+import DataNotesTab from '@/components/common/DataNotesTab.vue'
 
 const showLogPanel = ref(false)
 </script>
@@ -9,6 +10,7 @@ const showLogPanel = ref(false)
 <template>
   <RouterView />
   <LogPanel v-model:show="showLogPanel" />
+  <DataNotesTab />
 </template>
 
 <style>

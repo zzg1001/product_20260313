@@ -22,6 +22,11 @@ async function request<T>(
     throw new Error(error.detail || `HTTP error! status: ${response.status}`)
   }
 
+  // 204 No Content 没有响应体
+  if (response.status === 204) {
+    return undefined as T
+  }
+
   return response.json()
 }
 
@@ -692,6 +697,127 @@ export const executionsApi = {
   },
 }
 
+// ============ Data Notes API ============
+
+export interface DataNote {
+  id: string
+  user_id: string
+  name: string
+  description: string | null
+  file_type: string  // 'folder' 表示文件夹
+  file_url: string | null
+  file_size?: string
+  source_skill?: string
+  is_favorited: boolean
+  parent_id: string | null
+  level: number
+  item_count?: number  // 文件夹内项目数
+  created_at?: string
+  updated_at?: string
+}
+
+export interface DataNoteCreate {
+  name: string
+  description?: string
+  file_type: string
+  file_url?: string
+  file_size?: string
+  source_skill?: string
+  parent_id?: string
+}
+
+export interface DataNoteUpdate {
+  name?: string
+  description?: string
+  is_favorited?: boolean
+  parent_id?: string
+}
+
+export interface FolderCreate {
+  name: string
+  parent_id?: string
+  item_ids: string[]
+}
+
+export const dataNotesApi = {
+  // 获取便签列表
+  getAll: (options?: { search?: string; favoritedOnly?: boolean; parentId?: string | null }) => {
+    const params = new URLSearchParams()
+    if (options?.search) params.append('q', options.search)
+    if (options?.favoritedOnly) params.append('favorited_only', 'true')
+    if (options?.parentId !== undefined) {
+      params.append('parent_id', options.parentId || '')
+    }
+    const query = params.toString()
+    return request<DataNote[]>(`/data-notes${query ? '?' + query : ''}`, {
+      headers: { 'X-User-ID': getUserId() }
+    })
+  },
+
+  // 获取单个便签
+  getById: (id: string) =>
+    request<DataNote>(`/data-notes/${id}`, {
+      headers: { 'X-User-ID': getUserId() }
+    }),
+
+  // 创建便签
+  create: (data: DataNoteCreate) =>
+    request<DataNote>('/data-notes', {
+      method: 'POST',
+      headers: { 'X-User-ID': getUserId() },
+      body: JSON.stringify(data),
+    }),
+
+  // 创建文件夹
+  createFolder: (data: FolderCreate) =>
+    request<DataNote>('/data-notes/folder', {
+      method: 'POST',
+      headers: { 'X-User-ID': getUserId() },
+      body: JSON.stringify(data),
+    }),
+
+  // 移动到文件夹
+  move: (id: string, targetFolderId: string | null) =>
+    request<DataNote>(`/data-notes/${id}/move`, {
+      method: 'POST',
+      headers: { 'X-User-ID': getUserId() },
+      body: JSON.stringify({ target_folder_id: targetFolderId }),
+    }),
+
+  // 更新便签
+  update: (id: string, data: DataNoteUpdate) =>
+    request<DataNote>(`/data-notes/${id}`, {
+      method: 'PUT',
+      headers: { 'X-User-ID': getUserId() },
+      body: JSON.stringify(data),
+    }),
+
+  // 删除便签
+  delete: (id: string) =>
+    request<void>(`/data-notes/${id}`, {
+      method: 'DELETE',
+      headers: { 'X-User-ID': getUserId() },
+    }),
+
+  // 切换收藏状态
+  toggleFavorite: (id: string) =>
+    request<{ id: string; is_favorited: boolean }>(`/data-notes/${id}/toggle-favorite`, {
+      method: 'POST',
+      headers: { 'X-User-ID': getUserId() },
+    }),
+
+  // 下载文件夹为zip的URL
+  getFolderZipUrl: (id: string) =>
+    `${API_BASE_URL}/data-notes/${id}/download-zip?x_user_id=${getUserId()}`,
+
+  // 获取文件夹内所有文件
+  getFolderFiles: (id: string) =>
+    request<{ id: string; name: string; file_type: string; file_url: string; file_size: string }[]>(
+      `/data-notes/${id}/files`,
+      { headers: { 'X-User-ID': getUserId() } }
+    ),
+}
+
 // Export all APIs
 export default {
   skills: skillsApi,
@@ -699,4 +825,5 @@ export default {
   workflows: workflowsApi,
   executions: executionsApi,
   favorites: favoritesApi,
+  dataNotes: dataNotesApi,
 }

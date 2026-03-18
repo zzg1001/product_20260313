@@ -132,12 +132,55 @@ class ExecutionService:
 
         for i in range(execution.current_step, len(nodes)):
             node = nodes[i]
+            node_type = node.get("type", "skill")
             skill_name = node.get("name", "")
-            skill = self.get_skill_by_name(skill_name)
 
             print(f"\n{'='*50}")
-            print(f"[Workflow._execute] === Step {i}: {skill_name} ===")
+            print(f"[Workflow._execute] === Step {i}: {skill_name} (type={node_type}) ===")
             print(f"[Workflow._execute] Context keys: {list(context.keys())}")
+
+            # 处理数据节点 - 直接将文件信息传递给下一步
+            if node_type == "data":
+                data_note = node.get("dataNote", {})
+                file_url = data_note.get("file_url", "")
+                file_type = data_note.get("file_type", "")
+
+                print(f"[Workflow._execute] Data node: file_url={file_url}, file_type={file_type}")
+
+                # 数据节点的结果
+                result = {
+                    "result": {
+                        "_output_file": {
+                            "name": skill_name,
+                            "url": file_url,
+                            "path": file_url,  # 用于传递给下一个节点
+                            "type": file_type
+                        },
+                        "file_url": file_url,
+                        "file_type": file_type,
+                        "data_note": data_note
+                    },
+                    "output": f"[数据源] {skill_name}"
+                }
+
+                context[f"step_{i}"] = result
+                completed_steps.append({
+                    "step_index": i,
+                    "skill_name": skill_name,
+                    "icon": node.get("icon"),
+                    "status": "completed",
+                    "result": result.get("result"),
+                    "output": result.get("output")
+                })
+
+                execution.current_step = i + 1
+                execution.context = context
+                execution.completed_steps = completed_steps
+                self.db.commit()
+                continue
+
+            # 普通技能节点
+            skill = self.get_skill_by_name(skill_name)
             print(f"[Workflow._execute] Skill found: {skill is not None}")
 
             # 检查是否需要运行时交互

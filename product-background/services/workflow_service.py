@@ -20,7 +20,18 @@ class WorkflowService:
                 (Workflow.description.ilike(search_term))
             )
 
-        return query.all()
+        workflows = query.all()
+
+        # 调试：打印加载的数据节点信息
+        for wf in workflows:
+            nodes = wf.nodes or []
+            data_nodes = [n for n in nodes if n.get('type') == 'data' or n.get('dataNote')]
+            if data_nodes:
+                print(f"[WorkflowService.get_all] Workflow '{wf.name}' has {len(data_nodes)} data node(s):")
+                for dn in data_nodes:
+                    print(f"  - name={dn.get('name')}, dataNote.file_url={dn.get('dataNote', {}).get('file_url')}")
+
+        return workflows
 
     def get_by_id(self, workflow_id: str) -> Optional[Workflow]:
         return self.db.query(Workflow).filter(Workflow.id == workflow_id).first()
@@ -77,6 +88,13 @@ class WorkflowService:
         edges = workflow_data.edges or []
         input_count, output_type = self._compute_io_from_nodes(nodes, edges)
 
+        # 调试：打印数据节点信息
+        data_nodes = [n for n in nodes if n.get('type') == 'data' or n.get('dataNote')]
+        if data_nodes:
+            print(f"[WorkflowService.create] Creating workflow with {len(data_nodes)} data node(s):")
+            for dn in data_nodes:
+                print(f"  - name={dn.get('name')}, dataNote.file_url={dn.get('dataNote', {}).get('file_url')}")
+
         workflow = Workflow(
             id=workflow_data.id,
             name=workflow_data.name,
@@ -98,6 +116,16 @@ class WorkflowService:
             return None
 
         update_data = workflow_data.model_dump(exclude_unset=True)
+
+        # 调试：打印更新的数据节点信息
+        if 'nodes' in update_data:
+            nodes = update_data['nodes'] or []
+            data_nodes = [n for n in nodes if n.get('type') == 'data' or n.get('dataNote')]
+            if data_nodes:
+                print(f"[WorkflowService.update] Updating workflow {workflow_id} with {len(data_nodes)} data node(s):")
+                for dn in data_nodes:
+                    print(f"  - name={dn.get('name')}, dataNote.file_url={dn.get('dataNote', {}).get('file_url')}")
+
         for key, value in update_data.items():
             setattr(workflow, key, value)
 

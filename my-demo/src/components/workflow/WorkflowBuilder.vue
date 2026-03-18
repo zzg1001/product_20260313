@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, onBeforeUnmount } from 'vue'
-import { skillsApi, workflowsApi, favoritesApi } from '@/api'
+import { skillsApi, workflowsApi, favoritesApi, dataNotesApi, type DataNote } from '@/api'
 
 interface WorkflowNode {
   id: string
-  type: 'skill' | 'workflow'
+  type: 'skill' | 'workflow' | 'data'
   name: string
   icon: string
   description: string
   position: { x: number; y: number }
   workflowData?: Workflow
+  dataNote?: DataNote  // 数据源节点
 }
 
 interface WorkflowEdge {
@@ -274,6 +275,55 @@ const toggleFavorite = async (itemId: string, event: Event) => {
   }
 }
 
+// 数据便签
+const dataNotes = ref<DataNote[]>([])
+const dataNotesLoading = ref(false)
+
+// 文件类型图标
+const dataFileIcons: Record<string, string> = {
+  xlsx: '📊', xls: '📊', csv: '📊',
+  json: '{ }', pdf: '📄',
+  docx: '📝', doc: '📝',
+  pptx: '📽', ppt: '📽',
+  png: '🖼', jpg: '🖼', jpeg: '🖼', gif: '🖼', svg: '🖼',
+  html: '🌐', txt: '📃', md: '📑',
+  mp4: '🎬', mp3: '🎵', zip: '📦'
+}
+const getDataFileIcon = (type: string) => dataFileIcons[type] || '📎'
+
+// 加载收藏的数据便签
+const loadDataNotes = async () => {
+  try {
+    dataNotesLoading.value = true
+    dataNotes.value = await dataNotesApi.getAll({ favoritedOnly: true })
+    console.log('[WorkflowBuilder] Loaded', dataNotes.value.length, 'favorited data notes')
+    dataNotes.value.forEach(n => {
+      console.log(`[WorkflowBuilder] DataNote: id=${n.id}, name="${n.name}", file_url=${n.file_url?.substring(0, 50) || 'null'}`)
+    })
+  } catch (error) {
+    console.error('Failed to load data notes:', error)
+  } finally {
+    dataNotesLoading.value = false
+  }
+}
+
+// 过滤数据便签
+const filteredDataNotes = computed(() => {
+  if (!searchQuery.value) return dataNotes.value
+  const q = searchQuery.value.toLowerCase()
+  return dataNotes.value.filter(n =>
+    n.name.toLowerCase().includes(q) ||
+    (n.description && n.description.toLowerCase().includes(q))
+  )
+})
+
+// 打开数据文件
+const openDataNote = (note: DataNote) => {
+  if (note.file_url) {
+    window.open(`http://${location.hostname}:8000${note.file_url}`, '_blank')
+  }
+}
+
 // 分组折叠状态
 const collapsedSections = ref<Set<string>>(new Set())
 
@@ -289,14 +339,22 @@ const handleClickOutside = (e: MouseEvent) => {
   }
 }
 
+// 监听数据变化
+const handleDataNotesChange = () => {
+  loadDataNotes()
+}
+
 onMounted(() => {
   loadFavorites()
+  loadDataNotes()
   document.addEventListener('click', handleClickOutside)
+  window.addEventListener('data-notes-changed', handleDataNotesChange)
 })
 
 onBeforeUnmount(() => {
   tooltip.value.show = false
   document.removeEventListener('click', handleClickOutside)
+  window.removeEventListener('data-notes-changed', handleDataNotesChange)
 })
 
 const toggleSection = (section: string) => {
@@ -402,6 +460,15 @@ const gridPanelItems = computed(() => {
       return filteredSkills.value
     case 'workflows':
       return filteredWorkflows.value
+    case 'data':
+      return filteredDataNotes.value.map(n => ({
+        id: `data-${n.id}`,
+        type: 'data' as const,
+        name: n.name,
+        icon: getDataFileIcon(n.file_type),
+        description: n.description,
+        dataNote: n
+      }))
     default:
       return []
   }
@@ -413,6 +480,7 @@ const gridPanelTitle = computed(() => {
     case 'favorites': return '⭐ 收藏'
     case 'skills': return 'Skills'
     case 'workflows': return '子流程'
+    case 'data': return '数据'
     default: return ''
   }
 })
@@ -478,15 +546,24 @@ const favoriteItems = computed(() => {
 
 // 添加节点
 const addNode = (item: any, x: number, y: number) => {
-  nodes.value.push({
+  const newNode = {
     id: `node-${Date.now()}`,
     type: item.type,
     name: item.name,
     icon: item.icon,
-    description: item.description,
+    description: item.description || '',
     position: { x, y },
-    workflowData: item.workflowData
+    workflowData: item.workflowData,
+    dataNote: item.dataNote
+  }
+  console.log('[addNode] Creating node:', {
+    id: newNode.id,
+    type: newNode.type,
+    name: newNode.name,
+    hasDataNote: !!newNode.dataNote,
+    dataNote_file_url: newNode.dataNote?.file_url
   })
+  nodes.value.push(newNode)
 }
 
 // 删除节点
@@ -660,6 +737,24 @@ const quickAdd = (item: any) => {
   addNode(item, last ? last.position.x + 180 : 60, last ? last.position.y : 80)
 }
 
+// 点击添加数据节点
+const quickAddData = (note: DataNote) => {
+  console.log('[quickAddData] Adding data node:', {
+    name: note.name,
+    file_type: note.file_type,
+    file_url: note.file_url,
+    fullNote: JSON.stringify(note)
+  })
+  const last = nodes.value[nodes.value.length - 1]
+  addNode({
+    type: 'data',
+    name: note.name,
+    icon: getDataFileIcon(note.file_type),
+    description: note.description || note.file_type,
+    dataNote: note
+  }, last ? last.position.x + 180 : 60, last ? last.position.y : 80)
+}
+
 // 保存对话框状态
 const showSaveDialog = ref(false)
 const saveDialogName = ref('')
@@ -684,6 +779,11 @@ const confirmSave = () => {
     saveNameError.value = '请输入工作流名称'
     return
   }
+
+  // 调试：打印保存的节点数据
+  console.log('[WorkflowBuilder] Saving nodes:', JSON.stringify(nodes.value, null, 2))
+  const dataNodes = nodes.value.filter(n => n.type === 'data')
+  console.log('[WorkflowBuilder] Data nodes:', dataNodes.map(n => ({ id: n.id, name: n.name, type: n.type, hasDataNote: !!n.dataNote, file_url: n.dataNote?.file_url })))
 
   emit('save', {
     id: props.editingWorkflow?.id || `wf-${Date.now()}`,
@@ -777,6 +877,19 @@ const handleItemMouseEnter = (e: MouseEvent, item: any) => {
 const handleItemMouseLeave = () => {
   tooltip.value.show = false
 }
+
+// 关闭所有浮动元素（标签页切换时调用）
+const closeAllPopups = () => {
+  tooltip.value.show = false
+  showGridPanel.value = false
+  lockedSection.value = null
+  hoverSection.value = null
+  showHelpPanel.value = false
+  showHelpTooltip.value = false
+}
+
+// 暴露方法给父组件
+defineExpose({ closeAllPopups })
 
 // 工作区节点的 tooltip（位置固定在节点上方）
 const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
@@ -1125,9 +1238,52 @@ const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
             </div>
           </Transition>
         </div>
-          </div>
-        </div>
 
+        <!-- 数据分组 -->
+        <div v-if="dataNotes.length > 0" class="section section-data">
+          <div class="section-title">
+            <div class="section-title-left clickable" @click="toggleSection('data')">
+              <span class="section-toggle" :class="{ collapsed: collapsedSections.has('data') }">▼</span>
+              <span class="section-label">数据</span>
+            </div>
+            <span class="section-count">{{ filteredDataNotes.length }}<template v-if="searchQuery">/{{ dataNotes.length }}</template></span>
+            <button
+              class="grid-btn"
+              :class="{ active: lockedSection === 'data' }"
+              @mouseenter="onGridBtnEnter('data', $event)"
+              @mouseleave="onGridBtnLeave"
+              @click="onGridBtnClick('data', $event)"
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <rect x="3" y="3" width="8" height="8" rx="1"/>
+                <rect x="13" y="3" width="8" height="8" rx="1"/>
+                <rect x="3" y="13" width="8" height="8" rx="1"/>
+                <rect x="13" y="13" width="8" height="8" rx="1"/>
+              </svg>
+            </button>
+          </div>
+          <Transition name="collapse">
+            <div v-show="!collapsedSections.has('data')" class="item-list">
+              <div
+                v-for="note in filteredDataNotes"
+                :key="note.id"
+                class="item data-item"
+                draggable="true"
+                @dragstart="e => e.dataTransfer?.setData('application/json', JSON.stringify({ type: 'data', name: note.name, icon: getDataFileIcon(note.file_type), description: note.description || note.file_type, dataNote: note }))"
+                @click="quickAddData(note)"
+              >
+                <span class="item-icon">{{ getDataFileIcon(note.file_type) }}</span>
+                <span class="item-name">{{ note.name }}</span>
+                <span class="item-add">+</span>
+              </div>
+              <div v-if="filteredDataNotes.length === 0 && searchQuery" class="no-results">
+                未找到匹配的数据
+              </div>
+            </div>
+          </Transition>
+        </div>
+        </div>
+      </div>
       </aside>
 
       <!-- 大网格面板 - 覆盖在画布上 -->
@@ -1147,15 +1303,15 @@ const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
                 v-for="item in gridPanelItems"
                 :key="'grid-' + item.id"
                 class="grid-item"
-                :class="{ workflow: item.type === 'workflow' }"
+                :class="{ workflow: item.type === 'workflow', data: item.type === 'data' }"
                 draggable="true"
                 @dragstart="e => { e.dataTransfer?.setData('application/json', JSON.stringify(item)); closeGridPanel() }"
-                @click="quickAdd(item); closeGridPanel()"
+                @click="item.type === 'data' ? (quickAddData(item.dataNote), closeGridPanel()) : (quickAdd(item), closeGridPanel())"
                 @mouseenter="handleItemMouseEnter($event, item)"
                 @mouseleave="handleItemMouseLeave"
               >
                 <span
-                  v-if="activeSection !== 'favorites'"
+                  v-if="activeSection !== 'favorites' && activeSection !== 'data'"
                   class="grid-item-fav"
                   :class="{ active: favorites.has(item.id) }"
                   @click.stop="toggleFavorite(item.id, $event)"
@@ -1236,6 +1392,24 @@ const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
                   >{{ favorites.has(item.id) ? '★' : '☆' }}</span>
                   <span class="grid-item-icon">{{ item.icon }}</span>
                   <span class="grid-item-name">{{ item.name }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 数据 -->
+            <div v-if="filteredDataNotes.length > 0" class="grid-section">
+              <div class="grid-section-title">数据</div>
+              <div class="grid-panel-grid">
+                <div
+                  v-for="note in filteredDataNotes"
+                  :key="'grid-data-' + note.id"
+                  class="grid-item data"
+                  draggable="true"
+                  @dragstart="e => { e.dataTransfer?.setData('application/json', JSON.stringify({ type: 'data', name: note.name, icon: getDataFileIcon(note.file_type), description: note.description || note.file_type, dataNote: note })); closeGridPanel() }"
+                  @click="quickAddData(note); closeGridPanel()"
+                >
+                  <span class="grid-item-icon">{{ getDataFileIcon(note.file_type) }}</span>
+                  <span class="grid-item-name">{{ note.name }}</span>
                 </div>
               </div>
             </div>
@@ -1320,6 +1494,7 @@ const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
           :class="{
             selected: selectedNode === node.id,
             'is-workflow': node.type === 'workflow',
+            'is-data': node.type === 'data',
             'drop-target': hoverTargetNode === node.id,
             'is-source': edgeFromNode === node.id
           }"
@@ -1329,8 +1504,9 @@ const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
           @mouseenter="handleNodeMouseEnter($event, node)"
           @mouseleave="handleItemMouseLeave"
         >
-          <!-- 输入端口（左侧） -->
+          <!-- 输入端口（左侧）- 数据节点不需要输入端口 -->
           <div
+            v-if="node.type !== 'data'"
             class="port input"
             :class="{ 'port-active': isDraggingEdge && edgeFromNode !== node.id }"
             @mouseup="onInputPortMouseUp($event, node.id)"
@@ -1341,7 +1517,7 @@ const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
           <div class="node-icon">{{ node.icon }}</div>
           <div class="node-info">
             <div class="node-name">{{ node.name }}</div>
-            <div class="node-type">{{ node.type === 'workflow' ? '子流程' : 'Skill' }}</div>
+            <div class="node-type">{{ node.type === 'workflow' ? '子流程' : node.type === 'data' ? '数据源' : 'Skill' }}</div>
           </div>
 
           <!-- 输出端口（右侧）- 拖拽建立连线 -->
@@ -1746,7 +1922,7 @@ const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 8px;
-  max-width: calc(110px * 3 + 8px * 2); /* 最多3列 */
+  max-width: calc(100px * 5 + 8px * 4); /* 最多5列，更扁平 */
 }
 
 .grid-item {
@@ -1755,9 +1931,9 @@ const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  width: 110px;
-  height: 72px;
+  gap: 3px;
+  width: 100px;
+  height: 60px;
   flex-shrink: 0;
   background: #f9fafb;
   border: 1px solid #e5e7eb;
@@ -1776,6 +1952,13 @@ const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
 }
 .grid-item.workflow:hover {
   border-color: #a78bfa;
+}
+.grid-item.data {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+.grid-item.data:hover {
+  border-color: #f59e0b;
 }
 .grid-item-fav {
   position: absolute;
@@ -1797,7 +1980,7 @@ const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
 }
 
 .grid-item-icon {
-  font-size: 26px;
+  font-size: 22px;
   line-height: 1;
 }
 
@@ -2045,6 +2228,9 @@ const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
 .item-fav:hover { color: #fbbf24; }
 .item-fav.active { color: #f59e0b; }
 .item-add { font-size: 10px; font-weight: 500; color: #9ca3af; opacity: 0; transition: opacity 0.15s; }
+.item-meta { font-size: 9px; color: #9ca3af; margin-left: 4px; }
+.data-item { background: #fffef8; border-color: #e8e4d0; }
+.data-item:hover { background: #fff9e6; border-color: #d4c99e; }
 
 /* 帮助悬浮按钮 - 右下角 */
 .help-fab {
@@ -2321,6 +2507,7 @@ const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
 .node:hover { border-color: #cbd5e1; box-shadow: 0 4px 16px rgba(0,0,0,0.1); }
 .node.selected { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.2); }
 .node.is-workflow { background: rgba(99,102,241,0.04); border-color: rgba(99,102,241,0.4); }
+.node.is-data { background: rgba(245,158,11,0.06); border-color: rgba(245,158,11,0.5); }
 .node.drop-target {
   border-color: #10b981;
   box-shadow: 0 0 0 4px rgba(16,185,129,0.25), 0 4px 20px rgba(16,185,129,0.2);
@@ -2338,6 +2525,7 @@ const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
   font-size: 18px; flex-shrink: 0;
 }
 .node.is-workflow .node-icon { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
+.node.is-data .node-icon { background: linear-gradient(135deg, #f59e0b, #d97706); }
 
 .node-info { flex: 1; overflow: hidden; }
 .node-name { font-size: 12px; font-weight: 600; color: #1e293b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

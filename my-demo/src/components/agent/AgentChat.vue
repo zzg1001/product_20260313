@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, computed, onUnmounted } from 'vue'
-import { agentApi, type ChatMessage } from '@/api'
+import { ref, nextTick, watch, computed, onUnmounted, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
+import { agentApi, dataNotesApi, type ChatMessage, type DataNote } from '@/api'
+import SlashCommandPopup from './SlashCommandPopup.vue'
 
 // 输出文件类型
 interface OutputFile {
@@ -57,6 +59,7 @@ interface Message {
   timestamp: Date
   skillPlan?: SkillStep[]
   pipelineEdges?: PipelineEdge[]  // 边的关系
+  dataNodes?: Record<string, any>  // 数据节点信息（用于获取输入文件）
   waitingForSkill?: string // 等待添加的技能名
   pipelineGroupId?: string  // 关联的 group ID
   attachments?: MessageAttachment[]  // 附件
@@ -152,6 +155,174 @@ interface UploadedFile {
 const uploadedFiles = ref<UploadedFile[]>([])
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
+// 数据便签（用于"/"补全和保存）
+const dataNotesForSlash = ref<DataNote[]>([])
+
+// "/" 补全弹窗
+const slashPopupRef = ref<InstanceType<typeof SlashCommandPopup> | null>(null)
+const showSlashPopup = ref(false)
+const slashQuery = ref('')
+const slashPopupPosition = ref({ x: 0, y: 0 })
+
+// 加载便签数据（用于"/"补全，只加载根目录）
+const loadDataNotesForSlash = async () => {
+  try {
+    dataNotesForSlash.value = await dataNotesApi.getAll({ parentId: null })
+  } catch (e) {
+    console.error('Failed to load data notes:', e)
+  }
+}
+
+// 保存文件到便签
+const saveToDataNotes = async (outputFile: OutputFile, skillName?: string) => {
+  try {
+    await dataNotesApi.create({
+      name: outputFile.name,
+      description: `由技能 ${skillName || '未知'} 生成`,
+      file_type: outputFile.type,
+      file_url: outputFile.url,
+      file_size: outputFile.size,
+      source_skill: skillName
+    })
+    // 刷新便签列表供"/"补全使用
+    loadDataNotesForSlash()
+  } catch (e) {
+    console.error('Failed to save to data notes:', e)
+  }
+}
+
+// 检测 "/" 命令输入
+const handleInputKeydown = (e: KeyboardEvent) => {
+  // 处理 "/" 补全的键盘导航
+  if (showSlashPopup.value) {
+    const navKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace']
+    if (navKeys.includes(e.key)) {
+      // Backspace 在有查询时允许正常删除
+      if (e.key === 'Backspace' && slashQuery.value) {
+        return
+      }
+      e.preventDefault()
+      e.stopPropagation()
+      slashPopupRef.value?.handleKeydown(e)
+      return
+    }
+  }
+
+  // 回车发送消息（弹窗不显示时）
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    sendMessage()
+  }
+}
+
+// 输入框内容变化时检测 "/"
+const handleInputChange = () => {
+  const text = inputText.value
+  const lastSlashIndex = text.lastIndexOf('/')
+
+  if (lastSlashIndex >= 0) {
+    // 检查 "/" 前是否是空格或行首
+    const charBefore = lastSlashIndex > 0 ? text[lastSlashIndex - 1] : ' '
+    if (charBefore === ' ' || charBefore === '\n' || lastSlashIndex === 0) {
+      const query = text.slice(lastSlashIndex + 1)
+      // 只在查询没有空格时显示弹窗
+      if (!query.includes(' ') && !query.includes('\n')) {
+        // 如果弹窗之前没显示，加载根目录数据
+        if (!showSlashPopup.value) {
+          loadDataNotesForSlash()
+        }
+        slashQuery.value = query
+        showSlashPopup.value = true
+        // 计算弹窗位置（在输入框上方）
+        const textarea = document.querySelector('.chat-input textarea')
+        if (textarea) {
+          const rect = textarea.getBoundingClientRect()
+          slashPopupPosition.value = { x: rect.left + 10, y: rect.top }
+        }
+        return
+      }
+    }
+  }
+
+  // 关闭弹窗
+  if (showSlashPopup.value) {
+    closeSlashPopup()
+  }
+}
+
+// 待发送的数据引用（通过 "/" 选择的）
+interface PendingRef {
+  id: string
+  name: string
+  type: string
+  file_url: string
+  isFolder: boolean
+  folderId?: string
+}
+const pendingRefs = ref<PendingRef[]>([])
+
+// 选择 "/" 补全项（文件直接添加，文件夹显示为文件夹标签，发送时展开）
+const handleSlashSelect = (note: DataNote, isFolder: boolean) => {
+  const text = inputText.value
+  const lastSlashIndex = text.lastIndexOf('/')
+
+  // 移除 "/" 及其后的查询
+  if (lastSlashIndex >= 0) {
+    inputText.value = text.slice(0, lastSlashIndex)
+  }
+
+  if (isFolder) {
+    // 文件夹：显示文件夹标签，发送时再展开
+    pendingRefs.value.push({
+      id: `ref-${Date.now()}`,
+      name: note.name,
+      type: 'folder',
+      file_url: '',
+      isFolder: true,
+      folderId: note.id
+    })
+  } else if (note.file_url) {
+    // 普通文件：直接添加
+    pendingRefs.value.push({
+      id: `ref-${Date.now()}`,
+      name: note.name,
+      type: note.file_type,
+      file_url: note.file_url,
+      isFolder: false
+    })
+  }
+
+  // 关闭弹窗
+  closeSlashPopup()
+}
+
+// 移除待发送引用
+const removePendingRef = (id: string) => {
+  pendingRefs.value = pendingRefs.value.filter(r => r.id !== id)
+}
+
+// blur 延迟关闭的 timer
+let blurCloseTimer: number | null = null
+
+// 关闭 "/" 弹窗
+const closeSlashPopup = () => {
+  if (blurCloseTimer) {
+    clearTimeout(blurCloseTimer)
+    blurCloseTimer = null
+  }
+  showSlashPopup.value = false
+}
+
+// 输入框失去焦点时延迟关闭弹窗（允许点击弹窗中的选项）
+const handleInputBlur = () => {
+  blurCloseTimer = window.setTimeout(() => {
+    if (showSlashPopup.value) {
+      closeSlashPopup()
+    }
+    blurCloseTimer = null
+  }, 300)  // 延迟稍长一点，让级联菜单有时间响应
+}
+
 // 停止控制器
 let abortController: AbortController | null = null
 
@@ -177,8 +348,9 @@ const clearConversation = () => {
     timestamp: new Date()
   }]
 
-  // 清空上传的文件
+  // 清空上传的文件和待发送引用
   uploadedFiles.value = []
+  pendingRefs.value = []
 
   // 重置流程相关状态
   collapsedGroups.value.clear()
@@ -551,6 +723,27 @@ watch(showSkillExecution, (isShow) => {
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutsidePanel)
+  window.removeEventListener('data-notes-changed', handleDataNotesChange)
+  showSlashPopup.value = false  // 关闭 "/" 弹窗
+})
+
+// 监听数据便签变化
+const handleDataNotesChange = () => {
+  loadDataNotesForSlash()
+}
+
+onMounted(() => {
+  loadDataNotesForSlash()
+  window.addEventListener('data-notes-changed', handleDataNotesChange)
+})
+
+// 监听输入框变化检测 "/" 命令
+watch(inputText, handleInputChange)
+
+// 监听路由变化，关闭弹窗
+const route = useRoute()
+watch(() => route.path, () => {
+  showSlashPopup.value = false
 })
 
 // 右侧技能面板相关状态
@@ -1400,12 +1593,14 @@ const pipelineLevels = computed(() => {
   edges.forEach(e => {
     const fromAdj = adj[e.from]
     if (fromAdj) {
+      // 源节点是技能节点，添加邻接关系并增加目标节点入度
       fromAdj.push(e.to)
+      const toDegree = inDegree[e.to]
+      if (toDegree !== undefined) {
+        inDegree[e.to] = toDegree + 1
+      }
     }
-    const toDegree = inDegree[e.to]
-    if (toDegree !== undefined) {
-      inDegree[e.to] = toDegree + 1
-    }
+    // 数据节点不在 adj 中，其出边不增加目标节点入度
   })
 
   // 拓扑排序分层
@@ -1738,12 +1933,14 @@ const getPipelineLevelsForGroup = (steps: SkillStep[], edges: PipelineEdge[]) =>
   edges.forEach(e => {
     const fromAdj = adj[e.from]
     if (fromAdj) {
+      // 源节点是技能节点，添加邻接关系并增加目标节点入度
       fromAdj.push(e.to)
+      const toDegree = inDegree[e.to]
+      if (toDegree !== undefined) {
+        inDegree[e.to] = toDegree + 1
+      }
     }
-    const toDegree = inDegree[e.to]
-    if (toDegree !== undefined) {
-      inDegree[e.to] = toDegree + 1
-    }
+    // 数据节点不在 adj 中，其出边不增加目标节点入度
   })
 
   // 拓扑排序分层
@@ -2159,7 +2356,35 @@ const executeSkills = async (messageId: number, skills: SkillStep[], startIndex:
     try {
       if (step.skillId) {
         // 构建参数：包含用户输入、原始上下文和文件路径
-        const filePaths = getContextFilePaths()
+        let filePaths = getContextFilePaths()
+
+        // 【关键】检查消息中的数据节点，获取文件路径
+        const dataNodesMap = msg?.dataNodes || {}
+        const edges = msg?.pipelineEdges || []
+        if (step.nodeId && Object.keys(dataNodesMap).length > 0) {
+          console.log(`[Skill Seq] Checking data nodes for "${step.skillName}"`)
+          edges.forEach((e: any) => {
+            if (e.to === step.nodeId) {
+              const dataNode = dataNodesMap[e.from]
+              if (dataNode?.dataNote?.file_url) {
+                const fileUrl = dataNode.dataNote.file_url
+                let extractedPath = ''
+                const filesMatch = fileUrl.match(/\/(files\/[^?]+)/) || fileUrl.match(/\/(uploads\/[^?]+)/)
+                if (filesMatch) {
+                  extractedPath = filesMatch[1]
+                } else if (fileUrl.startsWith('/')) {
+                  extractedPath = fileUrl.substring(1)
+                } else {
+                  extractedPath = fileUrl
+                }
+                if (extractedPath) {
+                  filePaths = [extractedPath, ...filePaths]
+                  console.log(`[Skill Seq] ✓ Found data node file for "${step.skillName}": ${extractedPath}`)
+                }
+              }
+            }
+          })
+        }
 
         // 安全解析 userInput
         let baseParams: Record<string, any> = {}
@@ -2274,8 +2499,17 @@ const executeSkills = async (messageId: number, skills: SkillStep[], startIndex:
 // 按拓扑层级并行执行技能
 const executeSkillsParallel = async (messageId: number) => {
   const msg = messages.value.find(m => m.id === messageId)
+  console.log('========================================')
+  console.log('[executeSkillsParallel] Starting execution')
+  console.log('[executeSkillsParallel] messageId:', messageId)
+  console.log('[executeSkillsParallel] msg.dataNodes:', msg?.dataNodes)
+  console.log('[executeSkillsParallel] msg.pipelineEdges:', msg?.pipelineEdges)
+  console.log('[executeSkillsParallel] msg.skillPlan:', msg?.skillPlan?.map(s => ({ id: s.id, nodeId: s.nodeId, skillName: s.skillName })))
+  console.log('========================================')
+
   if (!msg?.skillPlan || !msg.pipelineEdges) {
     // 没有边信息，回退到顺序执行
+    console.log('[executeSkillsParallel] No edges, falling back to sequential execution')
     if (msg?.skillPlan) {
       await executeSkills(messageId, msg.skillPlan)
     }
@@ -2287,6 +2521,7 @@ const executeSkillsParallel = async (messageId: number) => {
 
   // 如果没有nodeId，回退到顺序执行
   if (!steps[0]?.nodeId) {
+    console.log('[executeSkillsParallel] No nodeId, falling back to sequential execution')
     await executeSkills(messageId, steps)
     return
   }
@@ -2306,12 +2541,15 @@ const executeSkillsParallel = async (messageId: number) => {
   edges.forEach(e => {
     const fromAdj = adj[e.from]
     if (fromAdj) {
+      // 源节点是技能节点，添加邻接关系并增加目标节点入度
       fromAdj.push(e.to)
+      const toDegree = inDegree[e.to]
+      if (toDegree !== undefined) {
+        inDegree[e.to] = toDegree + 1
+      }
     }
-    const toDegree = inDegree[e.to]
-    if (toDegree !== undefined) {
-      inDegree[e.to] = toDegree + 1
-    }
+    // 如果源节点是数据节点（不在 adj 中），不增加目标节点入度
+    // 这样数据节点后的第一个技能节点入度为 0，可以立即执行
   })
 
   const remaining = new Set(steps.filter(s => s.nodeId).map(s => s.nodeId!))
@@ -2376,21 +2614,74 @@ const executeSkillsParallel = async (messageId: number) => {
 
           // 【关键】获取前驱节点的输出文件作为当前节点的输入
           const predecessorFiles: string[] = []
+          const dataNodesMap = msg.dataNodes || {}
+          console.log(`[Skill Parallel] ========== Processing "${step.skillName}" ==========`)
+          console.log(`[Skill Parallel] step.nodeId:`, step.nodeId)
+          console.log(`[Skill Parallel] dataNodesMap keys:`, Object.keys(dataNodesMap))
+          console.log(`[Skill Parallel] dataNodesMap full:`, JSON.stringify(dataNodesMap, null, 2))
+          console.log(`[Skill Parallel] edges:`, edges)
           if (step.nodeId) {
             // 找到所有指向当前节点的边
             edges.forEach(e => {
               if (e.to === step.nodeId) {
-                // 找到前驱节点的 step
+                console.log(`[Skill Parallel] Found incoming edge: ${e.from} -> ${e.to}`)
+                // 首先检查前驱节点是否是数据节点
+                const dataNode = dataNodesMap[e.from]
+                console.log(`[Skill Parallel] Looking for dataNode with key "${e.from}":`, dataNode ? 'FOUND' : 'NOT FOUND')
+                if (dataNode) {
+                  console.log(`[Skill Parallel] dataNode content:`, JSON.stringify(dataNode, null, 2))
+                }
+                if (dataNode?.dataNote?.file_url) {
+                  const fileUrl = dataNode.dataNote.file_url
+                  console.log(`[Skill Parallel] Raw file_url:`, fileUrl)
+                  // 提取服务器路径 - 支持多种格式
+                  let extractedPath = ''
+                  const filesMatch = fileUrl.match(/\/(files\/[^?]+)/) || fileUrl.match(/\/(uploads\/[^?]+)/)
+                  if (filesMatch) {
+                    extractedPath = filesMatch[1]
+                  } else if (fileUrl.startsWith('http')) {
+                    // 完整 URL，提取路径部分
+                    try {
+                      const url = new URL(fileUrl)
+                      extractedPath = url.pathname.substring(1) // 去掉开头的 /
+                    } catch (e) {
+                      extractedPath = fileUrl
+                    }
+                  } else if (fileUrl.startsWith('/')) {
+                    extractedPath = fileUrl.substring(1)
+                  } else {
+                    extractedPath = fileUrl
+                  }
+                  if (extractedPath) {
+                    predecessorFiles.push(extractedPath)
+                    console.log(`[Skill Parallel] ✓ Extracted file path for "${step.skillName}": ${extractedPath}`)
+                  }
+                  return // 已找到数据节点，跳过后续检查
+                } else {
+                  console.log(`[Skill Parallel] ✗ No file_url in dataNode for ${e.from}`)
+                }
+
+                // 找到前驱节点的 step（技能节点）
                 const predStep = nodeToStep.get(e.from)
                 if (predStep?.outputFile?.url) {
                   // 从 URL 提取服务器路径
                   const url = predStep.outputFile.url
                   // URL 格式: /outputs/xxx.json 或 http://xxx/outputs/xxx.json
-                  const match = url.match(/\/outputs\/([^/]+)$/)
-                  if (match) {
-                    const serverPath = `outputs/${match[1]}`
+                  const outputMatch = url.match(/\/outputs\/([^/]+)$/)
+                  if (outputMatch) {
+                    const serverPath = `outputs/${outputMatch[1]}`
                     predecessorFiles.push(serverPath)
                     console.log(`[Skill Parallel] Found predecessor output for "${step.skillName}": ${serverPath}`)
+                  } else {
+                    // 其他格式的 URL
+                    const filesMatch = url.match(/\/(files\/[^?]+)/) || url.match(/\/(uploads\/[^?]+)/)
+                    if (filesMatch) {
+                      predecessorFiles.push(filesMatch[1])
+                      console.log(`[Skill Parallel] Found predecessor file for "${step.skillName}": ${filesMatch[1]}`)
+                    } else if (url.startsWith('/')) {
+                      predecessorFiles.push(url.substring(1))
+                      console.log(`[Skill Parallel] Found predecessor path for "${step.skillName}": ${url.substring(1)}`)
+                    }
                   }
                 }
               }
@@ -2695,13 +2986,35 @@ const cancelSaveWorkflow = () => {
   pendingSaveGroup.value = null
 }
 
+// 检查节点名是否匹配某个数据笔记（用于兼容没有正确保存 type 的旧数据）
+const isDataNodeByName = (nodeName: string): boolean => {
+  if (!nodeName) return false
+  // 精确匹配
+  if (dataNotesForSlash.value.find(n => n.name === nodeName)) return true
+  // 去掉扩展名匹配
+  const nameWithoutExt = nodeName.replace(/\.[^.]+$/, '')
+  if (dataNotesForSlash.value.find(n => n.name === nameWithoutExt || n.name.replace(/\.[^.]+$/, '') === nameWithoutExt)) return true
+  return false
+}
+
 // 展开工作流节点（递归处理子流程）
-const expandWorkflowNodes = (nodes: any[], edges: any[] = []): { steps: SkillStep[], edges: PipelineEdge[] } => {
+const expandWorkflowNodes = (nodes: any[], edges: any[] = []): { steps: SkillStep[], edges: PipelineEdge[], dataNodes: Map<string, any> } => {
   const steps: SkillStep[] = []
   const resultEdges: PipelineEdge[] = []
   let stepId = 1
 
+  // 记录数据节点，供后续技能获取输入文件
+  const dataNodes = new Map<string, any>()
+
   const processNode = (node: any) => {
+    console.log(`[expandWorkflowNodes] Processing node:`, {
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      hasDataNote: !!node.dataNote,
+      dataNote_file_url: node.dataNote?.file_url
+    })
+
     if (node.type === 'workflow' && node.workflowData) {
       // 子流程：递归展开其所有节点
       const subResult = expandWorkflowNodes(node.workflowData.nodes, node.workflowData.edges || [])
@@ -2713,6 +3026,63 @@ const expandWorkflowNodes = (nodes: any[], edges: any[] = []): { steps: SkillSte
         })
       })
       resultEdges.push(...subResult.edges)
+      // 合并子流程的数据节点
+      subResult.dataNodes.forEach((v, k) => dataNodes.set(k, v))
+    } else if (node.type === 'data' || node.dataNote || isDataNodeByName(node.name)) {
+      // 数据节点：不作为执行步骤，只记录数据信息
+      // 兼容：检查 type === 'data' 或者有 dataNote 字段，或者名字匹配某个数据笔记
+      // 数据节点的文件会在执行时传递给连接的技能
+      let dataNote = node.dataNote
+      console.log(`[expandWorkflowNodes] Data node "${node.name}" (id=${node.id}, type=${node.type}):`, {
+        hasDataNote: !!dataNote,
+        dataNote_file_url: dataNote?.file_url,
+        node_dataNote: node.dataNote,
+        matchedByName: !node.dataNote && !node.type && isDataNodeByName(node.name)
+      })
+
+      // 兼容性处理：如果 dataNote 不完整（没有 file_url），尝试从 dataNotesForSlash 查找
+      if (!dataNote?.file_url) {
+        console.log(`[expandWorkflowNodes] dataNote missing file_url, searching in dataNotesForSlash (count=${dataNotesForSlash.value.length})`)
+        let found: DataNote | undefined
+
+        // 1. 先尝试按 ID 匹配（最准确）
+        if (dataNote?.id) {
+          found = dataNotesForSlash.value.find(n => n.id === dataNote!.id)
+          if (found) console.log(`[expandWorkflowNodes] Found by ID: ${found.id}`)
+        }
+
+        // 2. 尝试按名字精确匹配
+        if (!found && node.name) {
+          found = dataNotesForSlash.value.find(n => n.name === node.name)
+          if (found) console.log(`[expandWorkflowNodes] Found by exact name: ${found.name}`)
+        }
+
+        // 3. 尝试去掉扩展名匹配
+        if (!found && node.name) {
+          const nameWithoutExt = node.name.replace(/\.[^.]+$/, '')
+          found = dataNotesForSlash.value.find(n =>
+            n.name === nameWithoutExt ||
+            n.name.replace(/\.[^.]+$/, '') === nameWithoutExt
+          )
+          if (found) console.log(`[expandWorkflowNodes] Found by name without extension: ${found.name}`)
+        }
+
+        if (found) {
+          console.log(`[expandWorkflowNodes] ✓ Found complete dataNote for "${node.name}": file_url=${found.file_url}`)
+          dataNote = found
+        } else {
+          console.warn(`[expandWorkflowNodes] ✗ NOT FOUND: "${node.name}" (id=${dataNote?.id}) in dataNotesForSlash`)
+          console.warn(`[expandWorkflowNodes] Available notes:`, dataNotesForSlash.value.map(n => ({ id: n.id, name: n.name, file_url: n.file_url?.substring(0, 50) })))
+        }
+      }
+
+      dataNodes.set(node.id, {
+        nodeId: node.id,
+        name: node.name,
+        icon: node.icon,
+        dataNote: dataNote
+      })
+      console.log(`[expandWorkflowNodes] Added to dataNodes:`, node.id, dataNote?.file_url)
     } else {
       // 普通 Skill 节点
       const skill = getSkillByName(node.name)
@@ -2735,7 +3105,7 @@ const expandWorkflowNodes = (nodes: any[], edges: any[] = []): { steps: SkillSte
     resultEdges.push({ from: e.from, to: e.to })
   })
 
-  return { steps, edges: resultEdges }
+  return { steps, edges: resultEdges, dataNodes }
 }
 
 // 运行工作流 - 从 SkillsView 传入直接执行
@@ -2756,7 +3126,22 @@ const confirmRunWorkflow = () => {
   const externalFilePaths: string[] = workflow.filePaths || []
 
   // 将工作流转换为技能执行计划（递归展开子流程）
-  const { steps: skillPlan, edges: pipelineEdges } = expandWorkflowNodes(workflow.nodes, workflow.edges || [])
+  console.log('[confirmRunWorkflow] workflow.nodes:', workflow.nodes)
+  // 详细打印每个节点的数据
+  workflow.nodes.forEach((node: any, idx: number) => {
+    console.log(`[confirmRunWorkflow] Node ${idx}:`, {
+      id: node.id,
+      type: node.type,
+      name: node.name,
+      hasDataNote: !!node.dataNote,
+      dataNote: node.dataNote ? {
+        file_url: node.dataNote.file_url,
+        file_type: node.dataNote.file_type,
+        name: node.dataNote.name
+      } : null
+    })
+  })
+  const { steps: skillPlan, edges: pipelineEdges, dataNodes } = expandWorkflowNodes(workflow.nodes, workflow.edges || [])
 
   // 把用户上下文传递给每个 skill，避免执行时再次弹出交互面板
   if (context) {
@@ -2822,16 +3207,21 @@ const confirmRunWorkflow = () => {
   scrollToBottom()
 
   // 添加 Agent 响应
+  const dataNodesObj = Object.fromEntries(dataNodes)
+  console.log('[confirmRunWorkflow] dataNodes to store:', dataNodesObj)
+  console.log('[confirmRunWorkflow] pipelineEdges:', pipelineEdges)
   setTimeout(() => {
     const agentMessage: Message = {
       id: Date.now(),
       type: 'agent',
       content: context
-        ? `好的，我来帮你处理：「${context}」\n\n将使用工作流「${workflow.name}」，包含 ${workflow.nodes.length} 个步骤：`
-        : `好的，开始执行工作流「${workflow.name}」。这个流程包含 ${workflow.nodes.length} 个步骤：`,
+        ? `好的，我来帮你处理：「${context}」\n\n将使用工作流「${workflow.name}」，包含 ${skillPlan.length} 个步骤：`
+        : `好的，开始执行工作流「${workflow.name}」。这个流程包含 ${skillPlan.length} 个步骤：`,
       timestamp: new Date(),
       skillPlan,
-      pipelineEdges
+      pipelineEdges,
+      // 存储数据节点信息，供执行时获取输入文件
+      dataNodes: dataNodesObj
     }
     messages.value.push(agentMessage)
     scrollToBottom()
@@ -2855,19 +3245,56 @@ defineExpose({
 })
 
 const sendMessage = async () => {
-  if ((!inputText.value.trim() && uploadedFiles.value.length === 0) || isProcessing.value) return
+  // 如果 "/" 弹窗打开，Enter 应该选择项目，不发送消息
+  if (showSlashPopup.value) return
+  if ((!inputText.value.trim() && uploadedFiles.value.length === 0 && pendingRefs.value.length === 0) || isProcessing.value) return
+
+  // 处理待发送的数据引用（展开文件夹）
+  const refAttachments: MessageAttachment[] = []
+  for (const ref of pendingRefs.value) {
+    if (ref.isFolder && ref.folderId) {
+      // 文件夹：获取所有文件
+      try {
+        const files = await dataNotesApi.getFolderFiles(ref.folderId)
+        for (const f of files) {
+          refAttachments.push({
+            id: `ref-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            name: f.name,
+            type: f.file_type,
+            size: parseInt(f.file_size || '0') || 0,
+            serverPath: f.file_url
+          })
+        }
+      } catch (e) {
+        console.error('Failed to get folder files:', e)
+      }
+    } else {
+      // 普通文件
+      refAttachments.push({
+        id: ref.id,
+        name: ref.name,
+        type: ref.type,
+        size: 0,
+        serverPath: ref.file_url
+      })
+    }
+  }
+  pendingRefs.value = []
 
   // 收集附件信息（包含服务器路径）
-  const attachments: MessageAttachment[] = uploadedFiles.value
-    .filter(f => !f.uploading && !f.uploadError)  // 只包含上传成功的文件
-    .map(f => ({
-      id: f.id,
-      name: f.name,
-      type: f.type,
-      size: f.size,
-      url: f.url,
-      serverPath: f.serverPath
-    }))
+  const attachments: MessageAttachment[] = [
+    ...uploadedFiles.value
+      .filter(f => !f.uploading && !f.uploadError)
+      .map(f => ({
+        id: f.id,
+        name: f.name,
+        type: f.type,
+        size: f.size,
+        url: f.url,
+        serverPath: f.serverPath
+      })),
+    ...refAttachments
+  ]
 
   // 构建消息内容（包含文件描述）
   let messageContent = inputText.value.trim()
@@ -3706,6 +4133,11 @@ const openOutputFile = async (file: OutputFile) => {
                             <span class="file-name">{{ step.outputFile.name.length > 12 ? step.outputFile.name.slice(0, 10) + '...' : step.outputFile.name }}</span>
                             <span class="current-tag">新</span>
                           </button>
+                          <button
+                            class="save-to-notes-btn"
+                            @click.stop="saveToDataNotes(step.outputFile, step.skillName)"
+                            title="保存到便签"
+                          >📌</button>
                         </div>
                         <span v-if="step.status === 'completed' && step.output && !step.outputFile" class="step-output-text-mini">
                           {{ step.output }}
@@ -3833,6 +4265,20 @@ const openOutputFile = async (file: OutputFile) => {
 
         <!-- 输入区域 -->
         <div class="chat-input">
+          <!-- 待发送的数据引用 -->
+          <div v-if="pendingRefs.length > 0" class="pending-refs">
+            <div
+              v-for="ref in pendingRefs"
+              :key="ref.id"
+              class="pending-ref"
+              :class="{ folder: ref.isFolder }"
+            >
+              <span class="ref-icon">{{ ref.isFolder ? '📁' : '📎' }}</span>
+              <span class="ref-name">{{ ref.name }}</span>
+              <button class="ref-remove" @click="removePendingRef(ref.id)">×</button>
+            </div>
+          </div>
+
           <!-- 已上传文件预览 -->
           <div v-if="uploadedFiles.length > 0" class="uploaded-files">
             <div
@@ -3881,8 +4327,9 @@ const openOutputFile = async (file: OutputFile) => {
             </button>
             <textarea
               v-model="inputText"
-              placeholder="描述你想完成的任务，或拖拽文件到这里..."
-              @keydown.enter.exact.prevent="sendMessage"
+              placeholder="描述你想完成的任务，或拖拽文件到这里... 输入 / 插入数据"
+              @keydown="handleInputKeydown"
+              @blur="handleInputBlur"
               :disabled="isProcessing"
               rows="1"
             ></textarea>
@@ -3902,7 +4349,7 @@ const openOutputFile = async (file: OutputFile) => {
               v-else
               class="send-btn"
               @click="sendMessage"
-              :disabled="!inputText.trim() && uploadedFiles.length === 0"
+              :disabled="!inputText.trim() && uploadedFiles.length === 0 && pendingRefs.length === 0"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -3921,7 +4368,19 @@ const openOutputFile = async (file: OutputFile) => {
         </div>
 
       </div>
+
     </div>
+
+    <!-- "/" 补全弹窗（级联菜单） -->
+    <SlashCommandPopup
+      ref="slashPopupRef"
+      :notes="dataNotesForSlash"
+      :query="slashQuery"
+      :visible="showSlashPopup"
+      :position="slashPopupPosition"
+      @select="handleSlashSelect"
+      @close="closeSlashPopup"
+    />
 
     <!-- 右侧技能执行面板 -->
     <Transition name="slide-panel">
@@ -5991,6 +6450,33 @@ const openOutputFile = async (file: OutputFile) => {
   background: #dc2626;
 }
 
+/* 保存到便签按钮 */
+.save-to-notes-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: rgba(230, 200, 100, 0.2);
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4px;
+}
+
+.output-file-item:hover .save-to-notes-btn {
+  opacity: 1;
+}
+
+.save-to-notes-btn:hover {
+  background: rgba(230, 180, 60, 0.35);
+  transform: scale(1.1);
+}
+
 .history-text-mini {
   font-size: 10px;
   color: #94a3b8;
@@ -6754,6 +7240,58 @@ const openOutputFile = async (file: OutputFile) => {
   height: 20px;
 }
 
+/* 待发送的数据引用 */
+.pending-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #fffbeb;
+  border-bottom: 1px solid #fde68a;
+  border-radius: 12px 12px 0 0;
+}
+
+.pending-ref {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: #fff;
+  border: 1px solid #fbbf24;
+  border-radius: 12px;
+  font-size: 12px;
+  color: #92400e;
+}
+
+.pending-ref.folder {
+  background: #fef3c7;
+}
+
+.ref-icon {
+  font-size: 12px;
+}
+
+.ref-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ref-remove {
+  background: none;
+  border: none;
+  color: #d97706;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.ref-remove:hover {
+  color: #b45309;
+}
+
 /* 已上传文件预览区 */
 .uploaded-files {
   display: flex;
@@ -6763,6 +7301,10 @@ const openOutputFile = async (file: OutputFile) => {
   background: #f8fafc;
   border-bottom: 1px solid #e5e7eb;
   border-radius: 12px 12px 0 0;
+}
+
+.pending-refs + .uploaded-files {
+  border-radius: 0;
 }
 
 .uploaded-file {

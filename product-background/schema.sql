@@ -5,6 +5,7 @@
 -- ============================================
 
 -- 删除旧表（按依赖顺序）
+DROP TABLE IF EXISTS `user_data_notes`;
 DROP TABLE IF EXISTS `workflow_executions`;
 DROP TABLE IF EXISTS `workflows`;
 DROP TABLE IF EXISTS `skills`;
@@ -77,3 +78,28 @@ CREATE TABLE `workflow_executions` (
     INDEX `idx_executions_workflow_id` (`workflow_id`),
     INDEX `idx_executions_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作流执行实例表';
+
+
+-- ============================================
+-- 4. 用户数据便签表 (user_data_notes)
+-- 用于保存AI生成的数据文件，支持文件夹（最多3层）
+-- ============================================
+CREATE TABLE `user_data_notes` (
+    `id` VARCHAR(50) NOT NULL COMMENT '便签ID (UUID)',
+    `user_id` VARCHAR(50) NOT NULL COMMENT '用户ID',
+    `name` VARCHAR(100) NOT NULL COMMENT '便签名称',
+    `description` TEXT COMMENT '描述',
+    `file_type` VARCHAR(20) NOT NULL COMMENT '文件类型 (xlsx, pdf, json, folder等)',
+    `file_url` VARCHAR(500) COMMENT '文件URL（文件夹时为空）',
+    `file_size` VARCHAR(20) COMMENT '文件大小',
+    `source_skill` VARCHAR(100) COMMENT '来源技能名称',
+    `is_favorited` TINYINT(1) DEFAULT 0 COMMENT '是否收藏',
+    `parent_id` VARCHAR(50) COMMENT '父文件夹ID（NULL表示根目录）',
+    `level` INT DEFAULT 0 COMMENT '层级：0=根目录，最大3层',
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    INDEX `idx_data_notes_user_id` (`user_id`),
+    INDEX `idx_data_notes_parent_id` (`parent_id`),
+    INDEX `idx_data_notes_favorited` (`user_id`, `is_favorited`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户数据便签表';

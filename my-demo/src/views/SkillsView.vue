@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import SkillCard from '@/components/skills/SkillCard.vue'
 import AddSkillModal from '@/components/skills/AddSkillModal.vue'
 import AgentChat from '@/components/agent/AgentChat.vue'
@@ -40,6 +40,12 @@ const showModal = ref(false)
 const modalMode = ref<'create' | 'upload'>('create')
 const pendingSkillName = ref<string | null>(null)
 const agentChatRef = ref<InstanceType<typeof AgentChat> | null>(null)
+const workflowBuilderRef = ref<InstanceType<typeof WorkflowBuilder> | null>(null)
+
+// 监听标签切换，关闭浮动元素
+watch(activeTab, () => {
+  workflowBuilderRef.value?.closeAllPopups()
+})
 
 // 工作流运行对话框状态
 const showRunWorkflowDialog = ref(false)
@@ -177,6 +183,19 @@ const loadWorkflows = async () => {
   isLoadingWorkflows.value = true
   try {
     const apiWorkflows = await workflowsApi.getAll()
+    // 调试：检查API返回的节点数据
+    apiWorkflows.forEach(w => {
+      const dataNodes = (w.nodes || []).filter((n: any) => n.type === 'data' || n.dataNote)
+      if (dataNodes.length > 0) {
+        console.log(`[loadWorkflows] Workflow "${w.name}" data nodes from API:`, dataNodes.map((n: any) => ({
+          id: n.id,
+          type: n.type,
+          name: n.name,
+          hasDataNote: !!n.dataNote,
+          file_url: n.dataNote?.file_url
+        })))
+      }
+    })
     workflows.value = apiWorkflows.map(w => ({
       id: w.id,
       name: w.name,
@@ -260,6 +279,8 @@ const openCreateWorkflow = () => {
 
 // 编辑已有工作流
 const openEditWorkflow = (workflow: Workflow) => {
+  // 关闭浮框
+  wfTooltip.value.show = false
   // 深拷贝以避免直接修改原数据
   editingWorkflow.value = JSON.parse(JSON.stringify(workflow))
   nextTick(() => {
@@ -315,6 +336,7 @@ const handleSaveWorkflow = async (workflow: Workflow) => {
 
 // 删除工作流
 const deleteWorkflow = async (workflowId: string) => {
+  wfTooltip.value.show = false
   try {
     await workflowsApi.delete(workflowId)
     workflows.value = workflows.value.filter(w => w.id !== workflowId)
@@ -328,6 +350,7 @@ const deleteWorkflow = async (workflowId: string) => {
 
 // 运行工作流 - 打开对话框
 const runWorkflow = (workflow: Workflow) => {
+  wfTooltip.value.show = false
   pendingRunWorkflow.value = workflow
   workflowRunContext.value = ''
   workflowRunFiles.value = []
@@ -355,6 +378,19 @@ const confirmRunWorkflow = async () => {
 
   console.log('[Workflow Run] Files:', workflowRunFiles.value)
   console.log('[Workflow Run] File paths:', filePaths)
+
+  // 调试：打印 workflow 节点详情
+  console.log('[Workflow Run] Workflow nodes:', workflow.nodes)
+  const dataNodesDebug = workflow.nodes.filter((n: any) => n.type === 'data' || n.dataNote)
+  if (dataNodesDebug.length > 0) {
+    console.log('[Workflow Run] Data nodes in workflow:', dataNodesDebug.map((n: any) => ({
+      id: n.id,
+      name: n.name,
+      type: n.type,
+      hasDataNote: !!n.dataNote,
+      file_url: n.dataNote?.file_url
+    })))
+  }
 
   // 关闭对话框
   showRunWorkflowDialog.value = false
@@ -1060,6 +1096,8 @@ onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
   // 清理 tooltip 状态，避免页面切换后浮框残留
   wfTooltip.value.show = false
+  // 清理 WorkflowBuilder 的浮框
+  workflowBuilderRef.value?.closeAllPopups()
 })
 </script>
 
@@ -1197,6 +1235,7 @@ onUnmounted(() => {
         <div v-show="activeTab === 'workflows'" class="workflows-area">
           <!-- 如果正在编辑/创建工作流 -->
           <WorkflowBuilder
+            ref="workflowBuilderRef"
             v-if="showWorkflowBuilder"
             :skills="skills"
             :workflows="workflows"
