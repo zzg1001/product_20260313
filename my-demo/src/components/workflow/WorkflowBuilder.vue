@@ -1639,62 +1639,62 @@ const handleNodeMouseEnter = (e: MouseEvent, node: WorkflowNode) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
+  padding: 6px 12px;
   background: #fff;
   border-bottom: 1px solid #e2e8f0;
 }
-.header-left, .header-right { display: flex; align-items: center; gap: 8px; }
+.header-left, .header-right { display: flex; align-items: center; gap: 6px; }
 
 .back-btn {
-  width: 32px; height: 32px;
-  background: #f1f5f9; border: none; border-radius: 8px;
+  width: 26px; height: 26px;
+  background: #f1f5f9; border: none; border-radius: 6px;
   cursor: pointer; display: flex; align-items: center; justify-content: center;
   color: #64748b; transition: all 0.15s;
 }
 .back-btn:hover { background: #e2e8f0; color: #1e293b; }
-.back-btn svg { width: 16px; height: 16px; }
+.back-btn svg { width: 14px; height: 14px; }
 
 /* Header 标题 */
 .header-title {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
 }
 
 .header-icon {
-  width: 36px;
-  height: 36px;
+  width: 26px;
+  height: 26px;
   background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  border-radius: 10px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.25);
+  font-size: 13px;
+  box-shadow: 0 2px 6px rgba(99, 102, 241, 0.25);
 }
 
 .header-text {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   color: #1e293b;
 }
 
 .btn {
-  padding: 7px 14px;
-  border-radius: 8px;
-  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 11px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   border: none;
 }
 
 .btn svg {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
 }
 
 .btn.text {

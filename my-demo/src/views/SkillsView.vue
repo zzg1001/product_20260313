@@ -3394,7 +3394,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 24px;
+  padding: 6px 10px;
   background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
   color: white;
 }
@@ -3402,44 +3402,44 @@ onUnmounted(() => {
 .wrd-workflow-info {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 8px;
 }
 
 .wrd-icon {
-  width: 48px;
-  height: 48px;
+  width: 24px;
+  height: 24px;
   background: rgba(255, 255, 255, 0.2);
-  border-radius: 12px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
+  font-size: 12px;
 }
 
 .wrd-titles {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
 }
 
 .wrd-title {
-  font-size: 18px;
+  font-size: 13px;
   font-weight: 600;
   margin: 0;
 }
 
 .wrd-subtitle {
-  font-size: 13px;
+  font-size: 10px;
   opacity: 0.85;
   margin: 0;
 }
 
 .wrd-close {
-  width: 36px;
-  height: 36px;
+  width: 22px;
+  height: 22px;
   border: none;
   background: rgba(255, 255, 255, 0.15);
-  border-radius: 10px;
+  border-radius: 5px;
   color: white;
   cursor: pointer;
   display: flex;
@@ -3454,13 +3454,13 @@ onUnmounted(() => {
 }
 
 .wrd-close svg {
-  width: 18px;
-  height: 18px;
+  width: 12px;
+  height: 12px;
 }
 
 /* 对话框内容 */
 .wrd-content {
-  padding: 24px;
+  padding: 14px;
   overflow-y: auto;
   flex: 1;
 }
@@ -3468,19 +3468,19 @@ onUnmounted(() => {
 .wrd-hint {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: 8px;
+  padding: 10px 12px;
   background: linear-gradient(135deg, #eff6ff 0%, #f0f9ff 100%);
-  border-radius: 12px;
-  margin-bottom: 20px;
-  font-size: 13px;
+  border-radius: 10px;
+  margin-bottom: 14px;
+  font-size: 12px;
   color: #3b82f6;
   line-height: 1.5;
 }
 
 .wrd-hint svg {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
   margin-top: 1px;
 }
@@ -3489,10 +3489,10 @@ onUnmounted(() => {
 .wrd-input-area {
   background: #f8fafc;
   border: 2px dashed #e2e8f0;
-  border-radius: 16px;
-  padding: 16px;
+  border-radius: 12px;
+  padding: 12px;
   transition: all 0.2s ease;
-  margin-bottom: 20px;
+  margin-bottom: 14px;
 }
 
 .wrd-input-area.is-dragging {
@@ -3657,55 +3657,55 @@ onUnmounted(() => {
 /* 步骤预览 */
 .wrd-steps-preview {
   background: #f8fafc;
-  border-radius: 12px;
-  padding: 16px;
+  border-radius: 10px;
+  padding: 10px;
 }
 
 .wrd-steps-title {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: #64748b;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .wrd-steps-list {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .wrd-step {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
+  gap: 5px;
+  padding: 5px 8px;
   background: white;
-  border-radius: 10px;
+  border-radius: 8px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
 .wrd-step-number {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  border-radius: 6px;
+  border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   color: white;
 }
 
 .wrd-step-icon {
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .wrd-step-name {
-  font-size: 13px;
+  font-size: 11px;
   color: #334155;
   font-weight: 500;
 }
@@ -3719,8 +3719,8 @@ onUnmounted(() => {
 .wrd-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
-  padding: 16px 24px;
+  gap: 8px;
+  padding: 10px 14px;
   background: #f8fafc;
   border-top: 1px solid #e2e8f0;
 }
@@ -3729,10 +3729,10 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 12px 24px;
-  border-radius: 12px;
-  font-size: 14px;
+  gap: 5px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -3740,8 +3740,8 @@ onUnmounted(() => {
 }
 
 .wrd-btn svg {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
 }
 
 .wrd-btn-secondary {
