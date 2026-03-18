@@ -4,95 +4,127 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**AI Skills Platform** - A full-stack application for managing AI skills and workflows. Users can create/manage skills, build workflow orchestrations, and interact with an AI agent that plans skill execution.
+**AI Skills Platform** - A full-stack application for managing AI skills and workflows, with a separate admin system for management.
+
+- **Portal**: User-facing application for skills and workflows
+- **Admin**: Management system for models, permissions, tokens, and monitoring
 
 ## Project Structure
 
 ```
-product/
-├── my-demo/              # Vue 3 Frontend
-│   ├── src/
-│   │   ├── api/          # API client (fetch wrapper, typed interfaces)
-│   │   ├── components/   # Vue components
-│   │   │   ├── agent/    # AgentChat.vue - AI chat with skill planning
-│   │   │   ├── skills/   # AddSkillModal.vue, SkillCard.vue
-│   │   │   └── workflow/ # WorkflowBuilder.vue
-│   │   ├── views/        # SkillsView.vue (main page)
-│   │   └── stores/       # Pinia stores
-│   └── package.json
+ai-skills-platform/
 │
-└── product-background/   # FastAPI Backend
-    ├── main.py           # App entry, CORS, routers
-    ├── config.py         # Settings (DB, Anthropic API)
-    ├── database.py       # SQLAlchemy setup
-    ├── models/           # SQLAlchemy ORM models
-    ├── schemas/          # Pydantic schemas
-    ├── services/         # Business logic
-    │   └── agent_service.py  # Claude AI integration
-    ├── routers/          # API endpoints
-    └── schema.sql        # Database DDL
+├── portal/                        # 用户端 (Portal)
+│   ├── web/                       # Vue 3 前端
+│   │   ├── src/
+│   │   │   ├── api/               # API client
+│   │   │   ├── components/        # Vue 组件
+│   │   │   ├── views/             # 页面视图
+│   │   │   ├── stores/            # Pinia 状态
+│   │   │   └── config.ts          # 配置文件
+│   │   ├── .env.development       # 开发环境配置
+│   │   └── .env.production        # 生产环境配置
+│   │
+│   └── server/                    # FastAPI 后端
+│       ├── main.py                # 入口
+│       ├── config.py              # 配置
+│       ├── models/                # ORM 模型
+│       ├── schemas/               # Pydantic 模式
+│       ├── services/              # 业务逻辑
+│       ├── routers/               # API 路由
+│       ├── skills_storage/        # 技能文件存储
+│       ├── .env                   # 环境配置
+│       └── .env.example           # 配置模板
+│
+├── admin/                         # 管理端 (Admin)
+│   ├── web/                       # Vue 3 前端
+│   │   ├── src/
+│   │   │   ├── api/               # API client
+│   │   │   ├── views/             # 页面 (dashboard, models, etc.)
+│   │   │   └── config.ts          # 配置
+│   │   ├── .env.development
+│   │   └── .env.production
+│   │
+│   └── server/                    # FastAPI 后端
+│       ├── main.py
+│       ├── app/
+│       │   ├── api/v1/            # API 路由
+│       │   ├── core/              # 核心配置
+│       │   ├── models/            # ORM 模型
+│       │   └── schemas/           # Pydantic 模式
+│       └── .env.example
+│
+├── nginx/                         # Nginx 配置
+├── docker-compose.yml             # Docker 编排
+└── docker-compose.dev.yml         # 开发环境 (仅数据库)
 ```
 
 ## Commands
 
-### Frontend (my-demo)
+### Portal Web (用户端前端)
 
 ```bash
-cd my-demo
+cd portal/web
 
-# Install dependencies
-npm install
-
-# Development server (Vite)
-npm run dev
-
-# Build for production
-npm run build
-
-# Type check
-npm run type-check
-
-# Lint (oxlint + eslint)
-npm run lint
-
-# Format code (Prettier)
-npm run format
+npm install          # 安装依赖
+npm run dev          # 开发服务器 (localhost:5173)
+npm run build        # 生产构建
+npm run type-check   # 类型检查
+npm run lint         # 代码检查
+npm run format       # 代码格式化
 ```
 
-**Note:** Requires Node.js ^20.19.0 or >=22.12.0
-
-### Backend (product-background)
+### Portal Server (用户端后端)
 
 ```bash
-cd product-background
+cd portal/server
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Development server (with auto-reload)
-uvicorn main:app --reload
-
-# Production server
-uvicorn main:app --host 0.0.0.0 --port 8000
+pip install -r requirements.txt    # 安装依赖
+uvicorn main:app --reload          # 开发服务器 (localhost:8000)
 ```
 
-### Database Setup
+### Admin Web (管理端前端)
 
 ```bash
-# Execute DDL in MySQL
-mysql -u root -p product_background < schema.sql
+cd admin/web
+
+npm install          # 安装依赖
+npm run dev          # 开发服务器 (localhost:5174)
+npm run build        # 生产构建
+```
+
+### Admin Server (管理端后端)
+
+```bash
+cd admin/server
+
+pip install -r requirements.txt    # 安装依赖
+uvicorn main:app --reload --port 8001    # 开发服务器 (localhost:8001)
+```
+
+### Docker 部署
+
+```bash
+# 开发环境 - 仅启动数据库
+docker-compose -f docker-compose.dev.yml up -d
+
+# 生产环境 - 启动所有服务
+docker-compose up -d
+
+# 带 Nginx 网关
+docker-compose --profile gateway up -d
 ```
 
 ## Tech Stack
 
-### Frontend
+### Frontend (Vue 3)
 - **Framework**: Vue 3 (Composition API, `<script setup>`)
-- **Build**: Vite 7
+- **Build**: Vite 6+
 - **State**: Pinia
-- **Router**: Vue Router 5
+- **Router**: Vue Router 4
 - **Language**: TypeScript
 
-### Backend
+### Backend (FastAPI)
 - **Framework**: FastAPI
 - **ORM**: SQLAlchemy 2.0
 - **Database**: MySQL 8+ (via PyMySQL)
@@ -101,81 +133,88 @@ mysql -u root -p product_background < schema.sql
 
 ## API Endpoints
 
+### Portal API (port 8000)
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET/POST/PUT/DELETE | `/skills` | Skill CRUD |
-| GET/POST/PUT/DELETE | `/workflows` | Workflow CRUD |
-| POST | `/agent/chat` | AI chat (non-streaming) |
-| POST | `/agent/chat/stream` | AI chat (SSE streaming) |
-| POST | `/agent/plan` | Plan skills for task |
-| POST | `/agent/execute` | Execute skill script |
-| GET | `/executions/workflow/{id}/precheck` | Pre-check workflow interactions |
-| POST | `/executions/workflow/{id}/start` | Start workflow execution |
-| GET | `/executions/{id}` | Get execution status |
-| POST | `/executions/{id}/interact` | Submit interaction response |
-| POST | `/executions/{id}/cancel` | Cancel execution |
+| GET/POST/PUT/DELETE | `/api/skills` | 技能 CRUD |
+| GET/POST/PUT/DELETE | `/api/workflows` | 工作流 CRUD |
+| POST | `/api/agent/chat` | AI 对话 |
+| POST | `/api/agent/chat/stream` | AI 流式对话 |
+| POST | `/api/agent/execute` | 执行技能 |
 
-## Key Patterns
+### Admin API (port 8001)
 
-### Vue Reactivity
-When modifying nested properties in reactive arrays, replace the entire element to trigger updates:
-```typescript
-// Don't: messages.value[i].skillPlan = plan
-// Do: messages.value[i] = { ...messages.value[i], skillPlan: plan }
-```
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/dashboard/stats` | 驾驶舱统计 |
+| GET/POST/PUT/DELETE | `/api/models` | 模型配置 |
+| GET | `/api/tokens/summary` | Token 用量统计 |
+| GET/POST/PUT/DELETE | `/api/users` | 用户管理 |
+| GET/POST/PUT/DELETE | `/api/permissions/roles` | 权限管理 |
+| GET | `/api/logs` | 日志审计 |
 
-### AI Skill Planning
-The AI agent outputs skill plans in a special format at the end of responses:
-```
-<!--SKILL_PLAN:[{"skill":"skill-name","action":"description","exists":true/false}]-->
-```
-Frontend parses this to render interactive pipeline UI.
+## Environment Configuration
 
-### SSE Streaming
-AI responses use Server-Sent Events for real-time streaming. Frontend uses `AsyncGenerator` pattern in `agentApi.chatStream()`.
+### Portal Server (.env)
 
-### Workflow Execution with Interactions
-Skills can define `interactions` that require user input during workflow execution:
-
-```typescript
-// Skill interaction types
-type InteractionType = 'input' | 'select' | 'multiselect' | 'confirm' | 'upload' | 'form'
-
-interface SkillInteraction {
-  id: string
-  type: InteractionType
-  label: string
-  timing: 'before' | 'during'  // before=collect upfront, during=pause at runtime
-  options?: { value: string; label: string }[]  // for select types
-}
-```
-
-**Execution Flow:**
-1. `precheck` - Get all `timing=before` interactions
-2. Collect user inputs in modal form
-3. `start` - Begin execution with `pre_inputs`
-4. If `timing=during` interaction needed → status becomes `paused`
-5. `interact` - Submit user response, resume execution
-6. Repeat until `completed` or `failed`
-
-## Environment Variables
-
-Backend (`.env` in product-background):
 ```env
+# 数据库
 DB_HOST=localhost
 DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=your_password
 DB_NAME=product_background
 
+# AI 模型
 ANTHROPIC_API_KEY=your_key
-ANTHROPIC_BASE_URL=       # Optional: Azure proxy URL
+ANTHROPIC_BASE_URL=        # Azure 代理 URL (可选)
 CLAUDE_MODEL=claude-opus-4-5
+
+# 调试
+DEBUG=true
 ```
 
-Frontend (`.env` in my-demo, optional):
+### Portal Web (.env.development)
+
 ```env
-VITE_API_BASE_URL=http://localhost:8000/api  # Default if not set
+VITE_APP_TITLE=AI Skills Platform (Dev)
+VITE_API_BASE_URL=http://localhost:8000/api
 ```
 
-Frontend config is in `src/config.ts`. Use `@/` for imports (alias to `./src`).
+### Admin Server (.env)
+
+```env
+# 数据库 (与 Portal 共享)
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=your_password
+DB_NAME=product_background
+
+# JWT
+SECRET_KEY=your-secret-key
+```
+
+### Admin Web (.env.development)
+
+```env
+VITE_APP_TITLE=AI Skills Admin (Dev)
+VITE_API_BASE_URL=http://localhost:8001/api
+```
+
+## Key Patterns
+
+### Vue Reactivity
+```typescript
+// Don't: messages.value[i].skillPlan = plan
+// Do: messages.value[i] = { ...messages.value[i], skillPlan: plan }
+```
+
+### AI Skill Planning
+```
+<!--SKILL_PLAN:[{"skill":"skill-name","action":"description","exists":true/false}]-->
+```
+
+### SSE Streaming
+AI responses use Server-Sent Events. Frontend uses `AsyncGenerator` pattern in `agentApi.chatStream()`.
