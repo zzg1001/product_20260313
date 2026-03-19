@@ -746,6 +746,9 @@ watch(() => route.path, () => {
   showSlashPopup.value = false
 })
 
+// 从首页跳转时显示返回按钮
+const showBackHome = computed(() => route.query.from === 'home')
+
 // 右侧技能面板相关状态
 interface SkillPanelMessage {
   id: number
@@ -3710,6 +3713,10 @@ const openOutputFile = async (file: OutputFile) => {
     <!-- 聊天头部 -->
     <header class="chat-header">
       <div class="header-left">
+        <!-- 从首页跳转时显示返回按钮 -->
+        <a v-if="showBackHome" href="http://localhost:5177" class="back-home-link" title="返回首页">
+          <span class="cmd">$</span> cd ~/home
+        </a>
         <div class="agent-avatar">
           <span class="avatar-icon">🤖</span>
           <span class="status-dot"></span>
@@ -4651,6 +4658,32 @@ const openOutputFile = async (file: OutputFile) => {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.back-home-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  margin-right: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+  text-decoration: none;
+  transition: all 0.15s;
+}
+
+.back-home-link:hover {
+  background: rgba(0, 0, 0, 0.5);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: white;
+}
+
+.back-home-link .cmd {
+  color: rgba(255, 255, 255, 0.5);
 }
 
 .agent-avatar {
