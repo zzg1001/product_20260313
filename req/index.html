@@ -1,0 +1,1926 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ike Data | 工业智能制造解决方案</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --primary: #1677FF;
+      --primary-dark: #0958d9;
+      --primary-light: #e6f4ff;
+      --secondary: #0f1419;
+      --accent: #FF6A00;
+      --accent-light: #fff7e6;
+      --success: #52c41a;
+      --bg: #ffffff;
+      --bg-gray: #f5f7fa;
+      --bg-dark: #0a1628;
+      --text: #1f2937;
+      --text-secondary: #6b7280;
+      --text-light: #9ca3af;
+      --border: #e5e7eb;
+      --shadow: 0 1px 3px rgba(0,0,0,0.08);
+      --shadow-lg: 0 10px 40px rgba(0,0,0,0.1);
+      --radius: 8px;
+      --radius-lg: 16px;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Noto Sans SC', 'DM Sans', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      font-size: 15px;
+    }
+
+    a {
+      text-decoration: none;
+      color: inherit;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Header */
+    .header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 1000;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      transition: all 0.3s ease;
+    }
+
+    .header-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 64px;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--primary), #4096ff);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    .logo-text {
+      font-weight: 700;
+      font-size: 18px;
+      color: var(--secondary);
+    }
+
+    .logo-text span {
+      color: var(--text-secondary);
+      font-weight: 400;
+      font-size: 13px;
+      margin-left: 8px;
+      padding-left: 8px;
+      border-left: 1px solid var(--border);
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      gap: 32px;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 28px;
+      list-style: none;
+    }
+
+    .nav-links a {
+      font-size: 14px;
+      color: var(--text);
+      font-weight: 500;
+      transition: color 0.2s;
+      position: relative;
+    }
+
+    .nav-links a:hover {
+      color: var(--primary);
+    }
+
+    .nav-links a.active {
+      color: var(--primary);
+    }
+
+    .nav-links a.active::after {
+      content: '';
+      position: absolute;
+      bottom: -20px;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--primary);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px 20px;
+      font-size: 14px;
+      font-weight: 500;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      border: none;
+    }
+
+    .btn-text {
+      background: transparent;
+      color: var(--text);
+    }
+
+    .btn-text:hover {
+      color: var(--primary);
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-dark);
+    }
+
+    .btn-outline {
+      background: white;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    .btn-outline:hover {
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+
+    .btn-lg {
+      padding: 12px 32px;
+      font-size: 15px;
+      border-radius: 8px;
+    }
+
+    .btn-icon {
+      gap: 8px;
+    }
+
+    /* Hero Section */
+    .hero {
+      padding: 140px 0 80px;
+      background: linear-gradient(180deg, #f0f5ff 0%, #ffffff 100%);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 60%;
+      height: 100%;
+      background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%231677ff' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+      opacity: 0.5;
+    }
+
+    .hero-inner {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 60px;
+      align-items: center;
+      position: relative;
+    }
+
+    .hero-content {
+      animation: fadeInUp 0.8s ease;
+    }
+
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--accent-light);
+      color: var(--accent);
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 20px;
+    }
+
+    .hero-badge svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .hero-title {
+      font-size: 44px;
+      font-weight: 700;
+      line-height: 1.25;
+      color: var(--secondary);
+      margin-bottom: 20px;
+    }
+
+    .hero-title .highlight {
+      color: var(--primary);
+    }
+
+    .hero-desc {
+      font-size: 17px;
+      color: var(--text-secondary);
+      line-height: 1.8;
+      margin-bottom: 32px;
+      max-width: 500px;
+    }
+
+    .hero-buttons {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 48px;
+    }
+
+    .hero-stats {
+      display: flex;
+      gap: 48px;
+    }
+
+    .hero-stat {
+      text-align: left;
+    }
+
+    .hero-stat-value {
+      font-size: 32px;
+      font-weight: 700;
+      color: var(--secondary);
+      display: flex;
+      align-items: baseline;
+      gap: 2px;
+    }
+
+    .hero-stat-value span {
+      font-size: 16px;
+      color: var(--primary);
+    }
+
+    .hero-stat-label {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    .hero-visual {
+      position: relative;
+      animation: fadeInUp 0.8s ease 0.2s both;
+    }
+
+    .hero-image {
+      background: linear-gradient(135deg, var(--bg-dark) 0%, #1a3a5c 100%);
+      border-radius: var(--radius-lg);
+      padding: 32px;
+      position: relative;
+      box-shadow: var(--shadow-lg);
+    }
+
+    .hero-dashboard {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 20px;
+    }
+
+    .dashboard-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+
+    .dashboard-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .dashboard-dot.red { background: #ff5f56; }
+    .dashboard-dot.yellow { background: #ffbd2e; }
+    .dashboard-dot.green { background: #27c93f; }
+
+    .dashboard-title {
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 12px;
+      margin-left: 8px;
+    }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .dashboard-card {
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .dashboard-card-label {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.5);
+      margin-bottom: 8px;
+    }
+
+    .dashboard-card-value {
+      font-size: 20px;
+      font-weight: 600;
+      color: white;
+    }
+
+    .dashboard-card-value.up {
+      color: #52c41a;
+    }
+
+    .dashboard-card-value.accent {
+      color: var(--accent);
+    }
+
+    .dashboard-chart {
+      grid-column: span 3;
+      height: 120px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      display: flex;
+      align-items: flex-end;
+      padding: 16px;
+      gap: 8px;
+    }
+
+    .chart-bar {
+      flex: 1;
+      background: linear-gradient(180deg, var(--primary), #69b1ff);
+      border-radius: 4px 4px 0 0;
+      transition: height 0.3s ease;
+    }
+
+    .floating-card {
+      position: absolute;
+      background: white;
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      animation: float 3s ease-in-out infinite;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
+    }
+
+    .floating-card.card-1 {
+      top: 20px;
+      right: -20px;
+      animation-delay: 0s;
+    }
+
+    .floating-card.card-2 {
+      bottom: 40px;
+      left: -30px;
+      animation-delay: 1s;
+    }
+
+    .floating-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .floating-icon.blue {
+      background: var(--primary-light);
+      color: var(--primary);
+    }
+
+    .floating-icon.orange {
+      background: var(--accent-light);
+      color: var(--accent);
+    }
+
+    .floating-icon svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    .floating-text {
+      font-size: 13px;
+    }
+
+    .floating-text strong {
+      display: block;
+      font-size: 15px;
+      color: var(--secondary);
+    }
+
+    /* Section Common */
+    section {
+      padding: 80px 0;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 48px;
+    }
+
+    .section-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--primary);
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .section-tag svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .section-title {
+      font-size: 32px;
+      font-weight: 700;
+      color: var(--secondary);
+      margin-bottom: 12px;
+    }
+
+    .section-desc {
+      font-size: 16px;
+      color: var(--text-secondary);
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    /* Products Section */
+    .products {
+      background: var(--bg-gray);
+    }
+
+    .products-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+    }
+
+    .product-card {
+      background: white;
+      border-radius: var(--radius-lg);
+      padding: 28px;
+      transition: all 0.3s ease;
+      border: 1px solid transparent;
+      cursor: pointer;
+    }
+
+    .product-card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-lg);
+      border-color: var(--primary-light);
+    }
+
+    .product-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
+
+    .product-icon svg {
+      width: 24px;
+      height: 24px;
+      color: white;
+    }
+
+    .product-icon.blue { background: linear-gradient(135deg, #1677ff, #4096ff); }
+    .product-icon.purple { background: linear-gradient(135deg, #722ed1, #9254de); }
+    .product-icon.cyan { background: linear-gradient(135deg, #13c2c2, #36cfc9); }
+    .product-icon.orange { background: linear-gradient(135deg, #fa8c16, #ffc53d); }
+    .product-icon.green { background: linear-gradient(135deg, #52c41a, #95de64); }
+    .product-icon.magenta { background: linear-gradient(135deg, #eb2f96, #ff85c0); }
+    .product-icon.red { background: linear-gradient(135deg, #f5222d, #ff7875); }
+    .product-icon.geek { background: linear-gradient(135deg, #2f54eb, #597ef7); }
+
+    .product-card h3 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--secondary);
+      margin-bottom: 8px;
+    }
+
+    .product-card p {
+      font-size: 13px;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    .product-card .arrow {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 13px;
+      color: var(--primary);
+      margin-top: 16px;
+      opacity: 0;
+      transform: translateX(-8px);
+      transition: all 0.3s ease;
+    }
+
+    .product-card:hover .arrow {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .product-card .arrow svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    /* Solutions Section */
+    .solutions {
+      background: white;
+    }
+
+    .solutions-tabs {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 40px;
+    }
+
+    .solution-tab {
+      padding: 10px 24px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      background: var(--bg-gray);
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .solution-tab:hover {
+      color: var(--primary);
+    }
+
+    .solution-tab.active {
+      background: var(--primary);
+      color: white;
+    }
+
+    .solution-content {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 60px;
+      align-items: center;
+    }
+
+    .solution-info h3 {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--secondary);
+      margin-bottom: 16px;
+    }
+
+    .solution-info p {
+      font-size: 15px;
+      color: var(--text-secondary);
+      line-height: 1.8;
+      margin-bottom: 24px;
+    }
+
+    .solution-features {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    .solution-feature {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .solution-feature-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: var(--primary-light);
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .solution-feature-icon svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    .solution-feature span {
+      font-size: 14px;
+      color: var(--text);
+    }
+
+    .solution-visual {
+      background: var(--bg-gray);
+      border-radius: var(--radius-lg);
+      padding: 40px;
+      position: relative;
+    }
+
+    .solution-diagram {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+
+    .diagram-node {
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      box-shadow: var(--shadow);
+      transition: all 0.3s ease;
+    }
+
+    .diagram-node:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .diagram-node-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      background: var(--primary-light);
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 12px;
+    }
+
+    .diagram-node-icon svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .diagram-node span {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+    }
+
+    .diagram-center {
+      grid-column: span 3;
+      background: linear-gradient(135deg, var(--primary), #4096ff);
+      color: white;
+    }
+
+    .diagram-center .diagram-node-icon {
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+    }
+
+    .diagram-center span {
+      color: white;
+    }
+
+    /* Customers Section */
+    .customers {
+      background: var(--bg-gray);
+    }
+
+    .customers-logos {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 60px;
+      flex-wrap: wrap;
+      margin-bottom: 48px;
+    }
+
+    .customer-logo {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-light);
+      opacity: 0.6;
+      transition: all 0.3s ease;
+    }
+
+    .customer-logo:hover {
+      opacity: 1;
+      color: var(--text-secondary);
+    }
+
+    .testimonial {
+      max-width: 800px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .testimonial-quote {
+      font-size: 20px;
+      color: var(--text);
+      line-height: 1.8;
+      margin-bottom: 24px;
+      position: relative;
+    }
+
+    .testimonial-quote::before {
+      content: '"';
+      font-size: 80px;
+      color: var(--primary-light);
+      position: absolute;
+      top: -20px;
+      left: -40px;
+      font-family: Georgia, serif;
+    }
+
+    .testimonial-author {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+    }
+
+    .testimonial-avatar {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--primary), #4096ff);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 600;
+      font-size: 18px;
+    }
+
+    .testimonial-info {
+      text-align: left;
+    }
+
+    .testimonial-name {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--secondary);
+    }
+
+    .testimonial-role {
+      font-size: 14px;
+      color: var(--text-secondary);
+    }
+
+    /* Projects Section */
+    .projects {
+      background: white;
+    }
+
+    .projects-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+    }
+
+    .project-card {
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      transition: all 0.3s ease;
+      display: block;
+    }
+
+    .project-card:hover {
+      border-color: var(--primary);
+      box-shadow: 0 4px 20px rgba(22, 119, 255, 0.15);
+      transform: translateY(-2px);
+    }
+
+    .project-card-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .project-card-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .project-card-icon svg {
+      width: 22px;
+      height: 22px;
+      color: white;
+    }
+
+    .project-card-icon.blue { background: linear-gradient(135deg, #1677ff, #4096ff); }
+    .project-card-icon.purple { background: linear-gradient(135deg, #722ed1, #9254de); }
+    .project-card-icon.green { background: linear-gradient(135deg, #52c41a, #73d13d); }
+    .project-card-icon.orange { background: linear-gradient(135deg, #fa8c16, #ffc53d); }
+
+    .project-card h3 {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--secondary);
+    }
+
+    .project-card p {
+      font-size: 13px;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    .project-card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    .project-card-tag {
+      font-size: 12px;
+      color: var(--primary);
+      background: var(--primary-light);
+      padding: 4px 10px;
+      border-radius: 4px;
+    }
+
+    .project-card-arrow {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--bg-gray);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-secondary);
+      transition: all 0.2s ease;
+    }
+
+    .project-card:hover .project-card-arrow {
+      background: var(--primary);
+      color: white;
+    }
+
+    .project-card-arrow svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    /* CTA Section */
+    .cta {
+      background: linear-gradient(135deg, var(--bg-dark) 0%, #1a365d 100%);
+      padding: 80px 0;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .cta::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M11 18c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm48 25c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm-43-7c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm63 31c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM34 90c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm56-76c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM12 86c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm28-65c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm23-11c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-6 60c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm29 22c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zM32 63c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm57-13c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-9-21c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM60 91c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM35 41c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM12 60c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2z' fill='%23ffffff' fill-opacity='0.03' fill-rule='evenodd'/%3E%3C/svg%3E");
+    }
+
+    .cta-content {
+      position: relative;
+      z-index: 1;
+    }
+
+    .cta h2 {
+      font-size: 36px;
+      font-weight: 700;
+      color: white;
+      margin-bottom: 16px;
+    }
+
+    .cta p {
+      font-size: 17px;
+      color: rgba(255, 255, 255, 0.7);
+      margin-bottom: 32px;
+      max-width: 500px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .cta-buttons {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+    }
+
+    .btn-white {
+      background: white;
+      color: var(--primary);
+    }
+
+    .btn-white:hover {
+      background: #f0f5ff;
+    }
+
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      color: white;
+    }
+
+    .btn-ghost:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.5);
+    }
+
+    /* Footer */
+    .footer {
+      background: var(--secondary);
+      color: rgba(255, 255, 255, 0.7);
+      padding: 60px 0 30px;
+    }
+
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 2fr repeat(4, 1fr);
+      gap: 40px;
+      margin-bottom: 40px;
+    }
+
+    .footer-brand .logo {
+      margin-bottom: 16px;
+    }
+
+    .footer-brand .logo-text {
+      color: white;
+    }
+
+    .footer-brand p {
+      font-size: 14px;
+      line-height: 1.7;
+      margin-bottom: 20px;
+    }
+
+    .footer-social {
+      display: flex;
+      gap: 12px;
+    }
+
+    .footer-social a {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(255, 255, 255, 0.7);
+      transition: all 0.2s ease;
+    }
+
+    .footer-social a:hover {
+      background: var(--primary);
+      color: white;
+    }
+
+    .footer-social svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .footer-col h4 {
+      font-size: 14px;
+      font-weight: 600;
+      color: white;
+      margin-bottom: 20px;
+    }
+
+    .footer-col ul {
+      list-style: none;
+    }
+
+    .footer-col li {
+      margin-bottom: 12px;
+    }
+
+    .footer-col a {
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.6);
+      transition: color 0.2s ease;
+    }
+
+    .footer-col a:hover {
+      color: white;
+    }
+
+    .footer-bottom {
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      padding-top: 30px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .footer-bottom p {
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 24px;
+    }
+
+    .footer-links a {
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    .footer-links a:hover {
+      color: white;
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .hero-inner {
+        grid-template-columns: 1fr;
+        text-align: center;
+      }
+
+      .hero-content {
+        order: 1;
+      }
+
+      .hero-visual {
+        order: 2;
+      }
+
+      .hero-desc {
+        margin-left: auto;
+        margin-right: auto;
+      }
+
+      .hero-buttons {
+        justify-content: center;
+      }
+
+      .hero-stats {
+        justify-content: center;
+      }
+
+      .products-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .solution-content {
+        grid-template-columns: 1fr;
+      }
+
+      .projects-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .footer-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 768px) {
+      .nav-links {
+        display: none;
+      }
+
+      .hero {
+        padding: 100px 0 60px;
+      }
+
+      .hero-title {
+        font-size: 32px;
+      }
+
+      .hero-stats {
+        flex-wrap: wrap;
+        gap: 24px;
+      }
+
+      .products-grid,
+      .projects-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .solutions-tabs {
+        flex-wrap: wrap;
+      }
+
+      .solution-diagram {
+        grid-template-columns: 1fr;
+      }
+
+      .diagram-center {
+        grid-column: span 1;
+      }
+
+      .customers-logos {
+        gap: 30px;
+      }
+
+      .footer-grid {
+        grid-template-columns: 1fr;
+        text-align: center;
+      }
+
+      .footer-social {
+        justify-content: center;
+      }
+
+      .footer-bottom {
+        flex-direction: column;
+        gap: 16px;
+        text-align: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="container">
+      <div class="header-inner">
+        <a href="#" class="logo">
+          <div class="logo-icon">IK</div>
+          <div class="logo-text">Ike Data<span>工业智能</span></div>
+        </a>
+
+        <nav class="nav">
+          <ul class="nav-links">
+            <li><a href="#products" class="active">产品</a></li>
+            <li><a href="#solutions">解决方案</a></li>
+            <li><a href="#customers">客户案例</a></li>
+            <li><a href="#projects">快速入口</a></li>
+            <li><a href="#contact">关于我们</a></li>
+          </ul>
+        </nav>
+
+        <div class="header-actions">
+          <button class="btn btn-text">登录</button>
+          <button class="btn btn-primary" onclick="location.href='#projects'">免费试用</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-inner">
+        <div class="hero-content">
+          <div class="hero-badge">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+            工业 4.0 智能解决方案
+          </div>
+
+          <h1 class="hero-title">
+            用 AI 赋能<span class="highlight">智能制造</span><br>
+            驱动产业数字化升级
+          </h1>
+
+          <p class="hero-desc">
+            宜氪数据提供基于 AI 大模型的一站式工业智能解决方案，
+            覆盖数据采集、智能分析、预测维护等全流程，
+            助力制造企业实现降本增效。
+          </p>
+
+          <div class="hero-buttons">
+            <a href="#products" class="btn btn-primary btn-lg btn-icon">
+              <span>了解产品</span>
+              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+              </svg>
+            </a>
+            <a href="#contact" class="btn btn-outline btn-lg">联系我们</a>
+          </div>
+
+          <div class="hero-stats">
+            <div class="hero-stat">
+              <div class="hero-stat-value">500<span>+</span></div>
+              <div class="hero-stat-label">服务企业</div>
+            </div>
+            <div class="hero-stat">
+              <div class="hero-stat-value">50<span>+</span></div>
+              <div class="hero-stat-label">世界500强客户</div>
+            </div>
+            <div class="hero-stat">
+              <div class="hero-stat-value">30<span>%</span></div>
+              <div class="hero-stat-label">平均效率提升</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-visual">
+          <div class="hero-image">
+            <div class="hero-dashboard">
+              <div class="dashboard-header">
+                <div class="dashboard-dot red"></div>
+                <div class="dashboard-dot yellow"></div>
+                <div class="dashboard-dot green"></div>
+                <span class="dashboard-title">生产监控大屏</span>
+              </div>
+              <div class="dashboard-grid">
+                <div class="dashboard-card">
+                  <div class="dashboard-card-label">设备运行率</div>
+                  <div class="dashboard-card-value up">96.8%</div>
+                </div>
+                <div class="dashboard-card">
+                  <div class="dashboard-card-label">产能利用</div>
+                  <div class="dashboard-card-value">87.2%</div>
+                </div>
+                <div class="dashboard-card">
+                  <div class="dashboard-card-label">预警数量</div>
+                  <div class="dashboard-card-value accent">3</div>
+                </div>
+                <div class="dashboard-chart">
+                  <div class="chart-bar" style="height: 60%"></div>
+                  <div class="chart-bar" style="height: 80%"></div>
+                  <div class="chart-bar" style="height: 45%"></div>
+                  <div class="chart-bar" style="height: 90%"></div>
+                  <div class="chart-bar" style="height: 70%"></div>
+                  <div class="chart-bar" style="height: 85%"></div>
+                  <div class="chart-bar" style="height: 55%"></div>
+                  <div class="chart-bar" style="height: 95%"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="floating-card card-1">
+              <div class="floating-icon blue">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+              </div>
+              <div class="floating-text">
+                <strong>实时监控</strong>
+                <span style="color: #52c41a;">设备状态正常</span>
+              </div>
+            </div>
+
+            <div class="floating-card card-2">
+              <div class="floating-icon orange">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+                </svg>
+              </div>
+              <div class="floating-text">
+                <strong>AI 预测</strong>
+                <span style="color: var(--text-secondary);">效率提升 28%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Products Section -->
+  <section id="products" class="products">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-tag">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+          </svg>
+          产品服务
+        </div>
+        <h2 class="section-title">全栈 AI 产品矩阵</h2>
+        <p class="section-desc">基于大模型和行业知识，构建面向工业场景的智能产品生态</p>
+      </div>
+
+      <div class="products-grid">
+        <div class="product-card">
+          <div class="product-icon blue">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+            </svg>
+          </div>
+          <h3>AI Agent</h3>
+          <p>智能对话代理，支持多轮交互、任务规划，实现业务流程自动化</p>
+          <div class="arrow">
+            了解更多
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="product-card">
+          <div class="product-icon purple">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"/>
+            </svg>
+          </div>
+          <h3>AI Skills</h3>
+          <p>可复用技能库，支持技能编排、一键部署，快速构建业务能力</p>
+          <div class="arrow">
+            了解更多
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="product-card">
+          <div class="product-icon cyan">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+            </svg>
+          </div>
+          <h3>模型管理</h3>
+          <p>统一模型配置中心，多模型切换、版本管理、性能监控</p>
+          <div class="arrow">
+            了解更多
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="product-card">
+          <div class="product-icon orange">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/>
+            </svg>
+          </div>
+          <h3>工业数据平台</h3>
+          <p>支持海量工业数据接入、存储、治理和分析一站式服务</p>
+          <div class="arrow">
+            了解更多
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="product-card">
+          <div class="product-icon green">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+            </svg>
+          </div>
+          <h3>智能数仓</h3>
+          <p>智能数据仓库，支持数据建模、ETL、智能查询与报表</p>
+          <div class="arrow">
+            了解更多
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="product-card">
+          <div class="product-icon magenta">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          </div>
+          <h3>任务调度</h3>
+          <p>智能任务编排，支持定时任务、工作流管理与实时监控</p>
+          <div class="arrow">
+            了解更多
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="product-card">
+          <div class="product-icon red">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+            </svg>
+          </div>
+          <h3>预测维护</h3>
+          <p>基于AI的设备健康预测，提前预警故障，降低停机损失</p>
+          <div class="arrow">
+            了解更多
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="product-card">
+          <div class="product-icon geek">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/>
+            </svg>
+          </div>
+          <h3>智能配置</h3>
+          <p>动态配置管理，支持灰度发布、版本回滚与配置中心</p>
+          <div class="arrow">
+            了解更多
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Solutions Section -->
+  <section id="solutions" class="solutions">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-tag">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
+          </svg>
+          解决方案
+        </div>
+        <h2 class="section-title">行业智能化解决方案</h2>
+        <p class="section-desc">深耕多个行业领域，提供端到端的智能化转型方案</p>
+      </div>
+
+      <div class="solutions-tabs">
+        <button class="solution-tab active">智能制造</button>
+        <button class="solution-tab">数字医疗</button>
+        <button class="solution-tab">新零售</button>
+        <button class="solution-tab">能源电力</button>
+      </div>
+
+      <div class="solution-content">
+        <div class="solution-info">
+          <h3>智能制造解决方案</h3>
+          <p>
+            通过 AI 技术与工业物联网深度融合，打造智能工厂，实现生产过程的数字化、
+            网络化、智能化，帮助制造企业提升生产效率、降低运营成本、优化产品质量。
+          </p>
+
+          <div class="solution-features">
+            <div class="solution-feature">
+              <div class="solution-feature-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+              </div>
+              <span>设备实时监控与预警</span>
+            </div>
+            <div class="solution-feature">
+              <div class="solution-feature-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+              </div>
+              <span>生产排程智能优化</span>
+            </div>
+            <div class="solution-feature">
+              <div class="solution-feature-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+              </div>
+              <span>质量追溯与分析</span>
+            </div>
+            <div class="solution-feature">
+              <div class="solution-feature-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+              </div>
+              <span>能耗管理与优化</span>
+            </div>
+          </div>
+
+          <a href="#" class="btn btn-primary btn-icon">
+            查看详情
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </a>
+        </div>
+
+        <div class="solution-visual">
+          <div class="solution-diagram">
+            <div class="diagram-node">
+              <div class="diagram-node-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
+                </svg>
+              </div>
+              <span>设备层</span>
+            </div>
+            <div class="diagram-node">
+              <div class="diagram-node-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7"/>
+                </svg>
+              </div>
+              <span>数据层</span>
+            </div>
+            <div class="diagram-node">
+              <div class="diagram-node-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2z"/>
+                </svg>
+              </div>
+              <span>分析层</span>
+            </div>
+            <div class="diagram-node diagram-center">
+              <div class="diagram-node-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+              </div>
+              <span>AI 智能决策引擎</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Customers Section -->
+  <section id="customers" class="customers">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-tag">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
+          </svg>
+          客户案例
+        </div>
+        <h2 class="section-title">深受全球领先企业信赖</h2>
+        <p class="section-desc">与众多世界500强企业建立深度合作关系</p>
+      </div>
+
+      <div class="customers-logos">
+        <span class="customer-logo">ExxonMobil</span>
+        <span class="customer-logo">Saint-Gobain</span>
+        <span class="customer-logo">LVMH</span>
+        <span class="customer-logo">中国烟草</span>
+        <span class="customer-logo">华为</span>
+        <span class="customer-logo">微软</span>
+      </div>
+
+      <div class="testimonial">
+        <p class="testimonial-quote">
+          宜氪数据的智能制造解决方案帮助我们实现了生产线的全面数字化升级，
+          设备利用率提升了35%，故障预警准确率达到95%以上，显著降低了运维成本。
+        </p>
+        <div class="testimonial-author">
+          <div class="testimonial-avatar">张</div>
+          <div class="testimonial-info">
+            <div class="testimonial-name">张总监</div>
+            <div class="testimonial-role">某世界500强制造企业 · 数字化负责人</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Projects Section -->
+  <section id="projects" class="projects">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-tag">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+          </svg>
+          快速入口
+        </div>
+        <h2 class="section-title">平台与服务入口</h2>
+        <p class="section-desc">一站式访问宜氪数据的各类平台与服务</p>
+      </div>
+
+      <div class="projects-grid">
+        <a href="../portal/web/" class="project-card">
+          <div class="project-card-header">
+            <div class="project-card-icon blue">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+              </svg>
+            </div>
+            <h3>AI Skills 平台</h3>
+          </div>
+          <p>技能管理与执行中心，快速构建和部署 AI 能力</p>
+          <div class="project-card-footer">
+            <span class="project-card-tag">核心平台</span>
+            <div class="project-card-arrow">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+              </svg>
+            </div>
+          </div>
+        </a>
+
+        <a href="../admin/web/" class="project-card">
+          <div class="project-card-header">
+            <div class="project-card-icon purple">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+              </svg>
+            </div>
+            <h3>后台管理系统</h3>
+          </div>
+          <p>系统配置与管理中心，模型、权限、日志一站式管理</p>
+          <div class="project-card-footer">
+            <span class="project-card-tag">管理后台</span>
+            <div class="project-card-arrow">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+              </svg>
+            </div>
+          </div>
+        </a>
+
+        <div class="project-card" style="cursor: pointer;" onclick="alert('请扫描公众号二维码关注我们')">
+          <div class="project-card-header">
+            <div class="project-card-icon green">
+              <svg fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 01.213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 00.167-.054l1.903-1.114a.864.864 0 01.717-.098 10.16 10.16 0 002.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348z"/>
+              </svg>
+            </div>
+            <h3>公众号</h3>
+          </div>
+          <p>关注获取最新动态、行业洞察与技术分享</p>
+          <div class="project-card-footer">
+            <span class="project-card-tag">资讯动态</span>
+            <div class="project-card-arrow">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <a href="#" class="project-card">
+          <div class="project-card-header">
+            <div class="project-card-icon orange">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
+              </svg>
+            </div>
+            <h3>OA 系统</h3>
+          </div>
+          <p>企业办公协同平台，流程审批与内部协作</p>
+          <div class="project-card-footer">
+            <span class="project-card-tag">内部系统</span>
+            <div class="project-card-arrow">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+              </svg>
+            </div>
+          </div>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section id="contact" class="cta">
+    <div class="container">
+      <div class="cta-content">
+        <h2>开启您的智能化转型之旅</h2>
+        <p>联系我们，获取专属解决方案咨询与产品演示</p>
+        <div class="cta-buttons">
+          <a href="mailto:contact@ikedata.com" class="btn btn-white btn-lg btn-icon">
+            免费咨询
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+            </svg>
+          </a>
+          <a href="tel:021-12345678" class="btn btn-ghost btn-lg">021-12345678</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a href="#" class="logo">
+            <div class="logo-icon">IK</div>
+            <div class="logo-text">Ike Data</div>
+          </a>
+          <p>
+            上海宜氪数据科技有限公司<br>
+            专注于工业智能制造领域的 AI 解决方案提供商
+          </p>
+          <div class="footer-social">
+            <a href="#">
+              <svg fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 01.213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 00.167-.054l1.903-1.114a.864.864 0 01.717-.098 10.16 10.16 0 002.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348z"/>
+              </svg>
+            </a>
+            <a href="#">
+              <svg fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+              </svg>
+            </a>
+            <a href="#">
+              <svg fill="currentColor" viewBox="0 0 24 24">
+                <path d="M22.46 6c-.85.38-1.78.64-2.75.76 1-.6 1.76-1.55 2.12-2.68-.93.55-1.96.95-3.06 1.17-.88-.94-2.13-1.53-3.51-1.53-2.66 0-4.81 2.16-4.81 4.81 0 .38.04.75.13 1.1-4-.2-7.58-2.11-9.96-5.02-.42.72-.66 1.56-.66 2.46 0 1.68.85 3.16 2.14 4.02-.79-.02-1.53-.24-2.18-.6v.06c0 2.35 1.67 4.31 3.88 4.76-.4.1-.83.16-1.27.16-.31 0-.62-.03-.92-.08.63 1.96 2.45 3.39 4.61 3.43-1.69 1.32-3.83 2.1-6.15 2.1-.4 0-.8-.02-1.19-.07 2.19 1.4 4.78 2.22 7.57 2.22 9.07 0 14.02-7.52 14.02-14.02 0-.21 0-.42-.01-.63.96-.69 1.79-1.56 2.45-2.55z"/>
+              </svg>
+            </a>
+          </div>
+        </div>
+
+        <div class="footer-col">
+          <h4>产品</h4>
+          <ul>
+            <li><a href="#products">AI Agent</a></li>
+            <li><a href="#products">AI Skills</a></li>
+            <li><a href="#products">模型管理</a></li>
+            <li><a href="#products">工业数据平台</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-col">
+          <h4>解决方案</h4>
+          <ul>
+            <li><a href="#solutions">智能制造</a></li>
+            <li><a href="#solutions">数字医疗</a></li>
+            <li><a href="#solutions">新零售</a></li>
+            <li><a href="#solutions">能源电力</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-col">
+          <h4>资源</h4>
+          <ul>
+            <li><a href="#">文档中心</a></li>
+            <li><a href="#">API 参考</a></li>
+            <li><a href="#">最佳实践</a></li>
+            <li><a href="#">开发者社区</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-col">
+          <h4>联系我们</h4>
+          <ul>
+            <li><a href="#">上海市</a></li>
+            <li><a href="mailto:contact@ikedata.com">contact@ikedata.com</a></li>
+            <li><a href="tel:021-12345678">021-12345678</a></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="footer-bottom">
+        <p>&copy; 2018-2026 上海宜氪数据科技有限公司. All rights reserved.</p>
+        <div class="footer-links">
+          <a href="#">隐私政策</a>
+          <a href="#">服务条款</a>
+          <a href="#">沪ICP备xxxxxxxx号</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Smooth scroll
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+      anchor.addEventListener('click', function(e) {
+        e.preventDefault();
+        const target = document.querySelector(this.getAttribute('href'));
+        if (target) {
+          const headerHeight = 64;
+          const targetPosition = target.getBoundingClientRect().top + window.pageYOffset - headerHeight;
+          window.scrollTo({
+            top: targetPosition,
+            behavior: 'smooth'
+          });
+        }
+      });
+    });
+
+    // Header scroll effect
+    const header = document.querySelector('.header');
+    window.addEventListener('scroll', () => {
+      if (window.scrollY > 50) {
+        header.style.boxShadow = '0 2px 10px rgba(0,0,0,0.1)';
+      } else {
+        header.style.boxShadow = 'none';
+      }
+    });
+
+    // Solution tabs
+    const tabs = document.querySelectorAll('.solution-tab');
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+      });
+    });
+
+    // Animate chart bars on scroll
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const bars = entry.target.querySelectorAll('.chart-bar');
+          bars.forEach((bar, i) => {
+            setTimeout(() => {
+              bar.style.opacity = '1';
+            }, i * 100);
+          });
+        }
+      });
+    }, { threshold: 0.5 });
+
+    const chart = document.querySelector('.dashboard-chart');
+    if (chart) {
+      observer.observe(chart);
+    }
+  </script>
+</body>
+</html>

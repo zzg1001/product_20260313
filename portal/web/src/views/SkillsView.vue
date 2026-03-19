@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import SkillCard from '@/components/skills/SkillCard.vue'
 import AddSkillModal from '@/components/skills/AddSkillModal.vue'
 import AgentChat from '@/components/agent/AgentChat.vue'
@@ -35,7 +36,18 @@ interface Workflow {
   updatedAt: string
 }
 
+const route = useRoute()
 const activeTab = ref<'skills' | 'agent' | 'workflows'>('agent')
+
+// 根据 URL 参数初始化 tab
+const initTabFromQuery = () => {
+  const tab = route.query.tab as string
+  if (tab === 'skills' || tab === 'agent' || tab === 'workflows') {
+    activeTab.value = tab
+  }
+}
+initTabFromQuery()
+
 const showModal = ref(false)
 const modalMode = ref<'create' | 'upload'>('create')
 const pendingSkillName = ref<string | null>(null)
