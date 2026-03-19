@@ -192,7 +192,7 @@ function scrollTo(id: string) {
         </div>
 
         <div class="products-grid">
-          <div class="product-card">
+          <a href="http://localhost:5173?from=home" target="_blank" class="product-card clickable">
             <div class="product-icon blue">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
@@ -201,7 +201,7 @@ function scrollTo(id: string) {
             <h3>AI Agent</h3>
             <p>智能对话代理，支持多轮交互、任务规划，实现业务流程自动化</p>
             <div class="arrow">了解更多 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg></div>
-          </div>
+          </a>
 
           <router-link to="/skills" class="product-card clickable">
             <div class="product-icon purple">

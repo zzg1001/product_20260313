@@ -39,6 +39,10 @@ interface Workflow {
 const route = useRoute()
 const activeTab = ref<'skills' | 'agent' | 'workflows'>('agent')
 
+// 从首页跳转时隐藏侧边栏
+const hideSidebar = computed(() => route.query.from === 'home')
+
+
 // 根据 URL 参数初始化 tab
 const initTabFromQuery = () => {
   const tab = route.query.tab as string
@@ -1117,8 +1121,8 @@ onUnmounted(() => {
   <div class="page">
     <!-- 主体 -->
     <div class="body">
-      <!-- 左侧导航 -->
-      <nav class="sidebar">
+      <!-- 左侧导航 - 从首页跳转时隐藏 -->
+      <nav v-if="!hideSidebar" class="sidebar">
         <div class="sidebar-logo">
           <div class="logo-icon">
             <svg viewBox="0 0 36 36" fill="none">
