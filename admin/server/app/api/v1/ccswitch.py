@@ -21,6 +21,45 @@ router = APIRouter()
 Base.metadata.create_all(bind=engine)
 
 
+def init_default_config():
+    """初始化默认配置（如果不存在）"""
+    from app.core.database import SessionLocal
+    db = SessionLocal()
+    try:
+        # 检查是否已有配置
+        existing = db.query(CCConfig).first()
+        if not existing:
+            # 创建默认配置（使用当前 Portal 的配置）
+            default_config = CCConfig(
+                id="default1",
+                name="Claude Opus 4.5 (Azure)",
+                description="默认配置 - Azure 代理的 Claude Opus 4.5 模型",
+                model_id="claude-opus-4-5",
+                api_key="***REMOVED***",
+                base_url="https://yunqinghu-3344-resource.services.ai.azure.com/anthropic/",
+                max_tokens=4096,
+                temperature=0.7,
+                top_p=1.0,
+                system_prompt=None,
+                extra_params=None,
+                is_active=True,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+            db.add(default_config)
+            db.commit()
+            print("✅ 已创建默认 Claude 配置")
+    except Exception as e:
+        print(f"⚠️ 初始化默认配置失败: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
+# 启动时初始化默认配置
+init_default_config()
+
+
 # ============ Schemas ============
 
 class CCConfigBase(BaseModel):
