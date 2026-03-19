@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Type Management | Financial Architect</title>
+<!-- Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<!-- Icons -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "surface-dim": "#cfdce3",
+              "surface-variant": "#d9e4ea",
+              "on-error": "#fff7f6",
+              "tertiary-fixed": "#dcddfe",
+              "surface-bright": "#f7f9fb",
+              "on-secondary-fixed": "#324053",
+              "error-container": "#fe8983",
+              "on-surface-variant": "#566166",
+              "tertiary-container": "#dcddfe",
+              "outline-variant": "#a9b4b9",
+              "on-secondary-container": "#455367",
+              "error-dim": "#4e0309",
+              "inverse-on-surface": "#9a9d9f",
+              "surface-container-low": "#f0f4f7",
+              "on-tertiary": "#fbf8ff",
+              "on-primary-fixed-variant": "#235d9a",
+              "on-tertiary-container": "#4c4e69",
+              "surface-tint": "#27609d",
+              "on-surface": "#2a3439",
+              "surface-container-highest": "#d9e4ea",
+              "on-tertiary-fixed-variant": "#555873",
+              "surface-container": "#e8eff3",
+              "primary-container": "#d3e4ff",
+              "surface-container-high": "#e1e9ee",
+              "secondary-fixed": "#d5e3fc",
+              "on-error-container": "#752121",
+              "secondary-container": "#d5e3fc",
+              "surface": "#f7f9fb",
+              "tertiary": "#5b5d78",
+              "on-secondary-fixed-variant": "#4e5c71",
+              "on-secondary": "#f8f8ff",
+              "outline": "#717c82",
+              "inverse-primary": "#89bcff",
+              "primary-fixed-dim": "#bbd6ff",
+              "error": "#9f403d",
+              "surface-container-lowest": "#ffffff",
+              "secondary": "#526074",
+              "inverse-surface": "#0b0f10",
+              "secondary-dim": "#465468",
+              "secondary-fixed-dim": "#c7d5ed",
+              "on-primary-container": "#135390",
+              "on-tertiary-fixed": "#393c55",
+              "on-primary": "#f6f7ff",
+              "on-background": "#2a3439",
+              "primary-dim": "#145490",
+              "primary-fixed": "#d3e4ff",
+              "on-primary-fixed": "#004075",
+              "tertiary-dim": "#4f516c",
+              "background": "#f7f9fb",
+              "primary": "#27609d",
+              "tertiary-fixed-dim": "#cecfef"
+            },
+            fontFamily: {
+              "headline": ["Manrope"],
+              "body": ["Inter"],
+              "label": ["Inter"]
+            },
+            borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+        .tabular-numbers {
+            font-variant-numeric: tabular-nums;
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f0f4f7;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #d9e4ea;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface font-body selection:bg-primary-container">
+<!-- TopNavBar -->
+<header class="bg-surface font-manrope text-on-surface flex justify-between items-center w-full px-8 h-16 fixed top-0 z-50 bg-surface-container-low">
+<div class="flex items-center gap-8">
+<span class="text-xl font-bold text-primary tracking-tight">Financial Architect</span>
+<nav class="hidden md:flex items-center gap-6 text-sm">
+<a class="text-on-surface-variant hover:text-primary transition-colors duration-200 ease-in-out" href="#">Dashboard</a>
+<a class="text-on-surface-variant hover:text-primary transition-colors duration-200 ease-in-out" href="#">IT Summary</a>
+<a class="text-on-surface-variant hover:text-primary transition-colors duration-200 ease-in-out" href="#">Monitoring</a>
+<a class="text-primary font-bold border-b-2 border-primary pb-1 transition-colors duration-200 ease-in-out" href="#">Type Mgmt</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<button class="text-on-surface-variant hover:text-primary transition-colors p-2">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="text-on-surface-variant hover:text-primary transition-colors p-2">
+<span class="material-symbols-outlined">settings</span>
+</button>
+<div class="h-8 w-8 rounded-full overflow-hidden ml-2 bg-surface-container-high">
+<img alt="User profile with role switcher" data-alt="User profile avatar icon placeholder" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCVtjd1xLDXD9GLFJPxKrBe9HH_ylT8jTM8ldUORM49e6nRKp_X7DE2_bKDsCT0-Jrw54RwYdeoa_YQdol6cUwOIG3Vv_KuOGpSjxYxT9AchebwybV95aSfEsEIETxMfGBUCOdH5k8bFrfrUaMookxxC-DquDtd1tOhfCCFeqTZjT3aOZjH0yQQ6vP8YcLOJRx4EIfdUkn0rCpvSA7cinD8e52G-0c_QLVuN_Q_TPi86xpXkAQXdSXIxuHXmoLGVNvsbS64q4iHkg"/>
+</div>
+</div>
+</header>
+<div class="flex pt-16">
+<!-- SideNavBar -->
+<aside class="bg-surface-container-low font-inter text-sm flex flex-col py-6 pl-4 fixed left-0 h-screen w-64 hidden lg:flex">
+<div class="mb-8 px-4">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 bg-primary rounded flex items-center justify-center text-on-primary font-bold">B</div>
+<div>
+<h2 class="font-manrope font-bold text-primary leading-tight">Budget Control</h2>
+<p class="text-[10px] uppercase tracking-wider text-on-surface-variant opacity-70">Enterprise Edition</p>
+</div>
+</div>
+</div>
+<nav class="flex-1 space-y-1 pr-4">
+<a class="flex items-center gap-3 px-4 py-3 text-on-surface-variant hover:text-on-surface hover:bg-surface-bright transition-all group active:scale-95" href="#">
+<span class="material-symbols-outlined text-xl">edit_document</span>
+<span>Budget Entry</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 text-on-surface-variant hover:text-on-surface hover:bg-surface-bright transition-all group active:scale-95" href="#">
+<span class="material-symbols-outlined text-xl">analytics</span>
+<span>IT Summary</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 bg-surface-container-lowest text-primary font-semibold rounded-l-lg transition-all active:scale-95" href="#">
+<span class="material-symbols-outlined text-xl" style="font-variation-settings: 'FILL' 1;">category</span>
+<span>Type Management</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 text-on-surface-variant hover:text-on-surface hover:bg-surface-bright transition-all group active:scale-95" href="#">
+<span class="material-symbols-outlined text-xl">monitor_heart</span>
+<span>Monitoring Hub</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 text-on-surface-variant hover:text-on-surface hover:bg-surface-bright transition-all group active:scale-95" href="#">
+<span class="material-symbols-outlined text-xl">group</span>
+<span>User Management</span>
+</a>
+</nav>
+<div class="mt-auto pr-4 space-y-1">
+<a class="flex items-center gap-3 px-4 py-2 text-on-surface-variant hover:text-on-surface transition-all" href="#">
+<span class="material-symbols-outlined text-lg">help</span>
+<span>Support</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-2 text-on-surface-variant hover:text-on-surface transition-all" href="#">
+<span class="material-symbols-outlined text-lg">history</span>
+<span>Archive</span>
+</a>
+<div class="pt-4 mt-4 border-t border-outline-variant/10">
+<button class="w-full bg-primary text-on-primary py-2.5 rounded font-medium shadow-sm hover:bg-primary-dim transition-colors flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-sm">ios_share</span>
+<span>Export Reports</span>
+</button>
+</div>
+</div>
+</aside>
+<!-- Main Canvas -->
+<main class="flex-1 lg:ml-64 p-8 min-h-screen">
+<!-- Header Section -->
+<div class="mb-12">
+<h1 class="font-headline text-4xl font-extrabold text-on-surface tracking-tight mb-2">Type Management</h1>
+<p class="text-on-surface-variant max-w-2xl">Define and maintain the architectural structure of your budget line items. Modifications impact the global general ledger mapping.</p>
+</div>
+<!-- Management Interface -->
+<div class="bg-surface-container-low rounded-xl p-1 shadow-sm">
+<!-- Tab Controls -->
+<div class="flex items-center justify-between mb-1 px-4 pt-4">
+<div class="flex gap-2">
+<button class="px-6 py-2.5 bg-surface-container-lowest text-primary font-bold rounded-lg shadow-sm">Capex Types</button>
+<button class="px-6 py-2.5 text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-colors">Opex Types</button>
+</div>
+<div class="flex items-center gap-3">
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-lg">search</span>
+<input class="bg-surface-container-highest border-none border-b-2 border-outline focus:ring-0 focus:border-primary pl-10 pr-4 py-2 text-sm w-64 transition-all" placeholder="Search types..." type="text"/>
+</div>
+<button class="bg-primary text-on-primary px-4 py-2 rounded-lg flex items-center gap-2 font-medium hover:bg-primary-dim transition-all">
+<span class="material-symbols-outlined text-sm">add</span>
+<span>Add New Type</span>
+</button>
+</div>
+</div>
+<!-- Table Content -->
+<div class="bg-surface-container-lowest rounded-lg overflow-hidden mt-4">
+<table class="w-full text-left border-collapse">
+<thead class="bg-surface-container-high text-on-surface-variant">
+<tr>
+<th class="px-6 py-4 font-semibold text-xs uppercase tracking-widest">Type Code</th>
+<th class="px-6 py-4 font-semibold text-xs uppercase tracking-widest">Type Name</th>
+<th class="px-6 py-4 font-semibold text-xs uppercase tracking-widest">Description</th>
+<th class="px-6 py-4 font-semibold text-xs uppercase tracking-widest">Status</th>
+<th class="px-6 py-4 font-semibold text-xs uppercase tracking-widest text-right">Actions</th>
+</tr>
+</thead>
+<tbody class="text-sm">
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="px-6 py-5 font-mono tabular-numbers text-primary font-semibold">CPX-INF-01</td>
+<td class="px-6 py-5 font-semibold text-on-surface">Data Center Infrastructure</td>
+<td class="px-6 py-5 text-on-surface-variant">Capital expenditure for physical server hardware, racks, and cooling systems.</td>
+<td class="px-6 py-5">
+<span class="bg-secondary-container text-on-secondary-container px-3 py-1 rounded-full text-xs font-medium">Active</span>
+</td>
+<td class="px-6 py-5 text-right">
+<div class="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-2 hover:bg-surface-container-high rounded-full text-outline hover:text-primary"><span class="material-symbols-outlined text-lg">edit</span></button>
+<button class="p-2 hover:bg-surface-container-high rounded-full text-outline hover:text-error"><span class="material-symbols-outlined text-lg">block</span></button>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="px-6 py-5 font-mono tabular-numbers text-primary font-semibold">CPX-SFT-04</td>
+<td class="px-6 py-5 font-semibold text-on-surface">Perpetual Licensing</td>
+<td class="px-6 py-5 text-on-surface-variant">Core ERP and database perpetual license assets with long-term amortization.</td>
+<td class="px-6 py-5">
+<span class="bg-secondary-container text-on-secondary-container px-3 py-1 rounded-full text-xs font-medium">Active</span>
+</td>
+<td class="px-6 py-5 text-right">
+<div class="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-2 hover:bg-surface-container-high rounded-full text-outline hover:text-primary"><span class="material-symbols-outlined text-lg">edit</span></button>
+<button class="p-2 hover:bg-surface-container-high rounded-full text-outline hover:text-error"><span class="material-symbols-outlined text-lg">block</span></button>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="px-6 py-5 font-mono tabular-numbers text-primary font-semibold">CPX-NET-09</td>
+<td class="px-6 py-5 font-semibold text-on-surface">Network Backbone Hardware</td>
+<td class="px-6 py-5 text-on-surface-variant">Switches, routers, and fiber optics for global WAN/LAN connectivity.</td>
+<td class="px-6 py-5">
+<span class="bg-secondary-container text-on-secondary-container px-3 py-1 rounded-full text-xs font-medium">Active</span>
+</td>
+<td class="px-6 py-5 text-right">
+<div class="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-2 hover:bg-surface-container-high rounded-full text-outline hover:text-primary"><span class="material-symbols-outlined text-lg">edit</span></button>
+<button class="p-2 hover:bg-surface-container-high rounded-full text-outline hover:text-error"><span class="material-symbols-outlined text-lg">block</span></button>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-low transition-colors group opacity-60">
+<td class="px-6 py-5 font-mono tabular-numbers text-outline font-semibold">CPX-SEC-02</td>
+<td class="px-6 py-5 font-semibold text-on-surface line-through">Legacy Security Tokens</td>
+<td class="px-6 py-5 text-on-surface-variant">Physical security keys for multi-factor authentication (Deprecated).</td>
+<td class="px-6 py-5">
+<span class="bg-surface-container-high text-on-surface-variant px-3 py-1 rounded-full text-xs font-medium uppercase tracking-tight">Disabled</span>
+</td>
+<td class="px-6 py-5 text-right">
+<div class="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-2 hover:bg-surface-container-high rounded-full text-outline hover:text-primary"><span class="material-symbols-outlined text-lg">undo</span></button>
+<button class="p-2 hover:bg-surface-container-high rounded-full text-error"><span class="material-symbols-outlined text-lg">delete</span></button>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="px-6 py-5 font-mono tabular-numbers text-primary font-semibold">CPX-DEV-12</td>
+<td class="px-6 py-5 font-semibold text-on-surface">R&amp;D Lab Equipment</td>
+<td class="px-6 py-5 text-on-surface-variant">Testing kits, prototyping hardware, and environment simulation rigs.</td>
+<td class="px-6 py-5">
+<span class="bg-secondary-container text-on-secondary-container px-3 py-1 rounded-full text-xs font-medium">Active</span>
+</td>
+<td class="px-6 py-5 text-right">
+<div class="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-2 hover:bg-surface-container-high rounded-full text-outline hover:text-primary"><span class="material-symbols-outlined text-lg">edit</span></button>
+<button class="p-2 hover:bg-surface-container-high rounded-full text-outline hover:text-error"><span class="material-symbols-outlined text-lg">block</span></button>
+</div>
+</td>
+</tr>
+</tbody>
+</table>
+<!-- Pagination / Summary -->
+<div class="flex items-center justify-between px-6 py-4 bg-surface-container-low/50 border-t border-outline-variant/10 text-xs">
+<span class="text-on-surface-variant font-medium">Showing <span class="text-on-surface font-bold">5</span> of <span class="text-on-surface font-bold">18</span> Capex Types</span>
+<div class="flex gap-2">
+<button class="p-1 hover:bg-surface-container-high rounded transition-colors disabled:opacity-30" disabled="">
+<span class="material-symbols-outlined">chevron_left</span>
+</button>
+<button class="p-1 hover:bg-surface-container-high rounded transition-colors">
+<span class="material-symbols-outlined">chevron_right</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Contextual Insight Panel (Asymmetric Column) -->
+<div class="mt-12 grid grid-cols-12 gap-8">
+<div class="col-span-12 lg:col-span-8">
+<div class="bg-primary-container/20 rounded-xl p-8 border-l-4 border-primary">
+<div class="flex items-start gap-4">
+<span class="material-symbols-outlined text-primary text-3xl">info</span>
+<div>
+<h3 class="font-headline font-bold text-primary mb-2">Audit Synchronization</h3>
+<p class="text-on-primary-container text-sm leading-relaxed">Changes made to Budget Types are logged in the master audit trail. Deactivating a type will prevent new budget entries from being created using that code, but historical data will remain intact for reporting and amortization schedules.</p>
+</div>
+</div>
+</div>
+</div>
+<div class="col-span-12 lg:col-span-4">
+<div class="bg-surface-container-low rounded-xl p-6 h-full">
+<h3 class="font-headline font-bold text-on-surface mb-4">Quick Stats</h3>
+<div class="space-y-4">
+<div class="flex justify-between items-center py-2 border-b border-outline-variant/10">
+<span class="text-xs text-on-surface-variant">Active Capex</span>
+<span class="font-bold tabular-numbers">14</span>
+</div>
+<div class="flex justify-between items-center py-2 border-b border-outline-variant/10">
+<span class="text-xs text-on-surface-variant">Active Opex</span>
+<span class="font-bold tabular-numbers">32</span>
+</div>
+<div class="flex justify-between items-center py-2 border-b border-outline-variant/10">
+<span class="text-xs text-on-surface-variant">Pending Sync</span>
+<span class="text-primary font-bold tabular-numbers">0</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+</body></html>

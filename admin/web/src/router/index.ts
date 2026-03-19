@@ -48,6 +48,12 @@ const router = createRouter({
       name: 'logs',
       component: () => import('@/views/logs/LogsView.vue'),
       meta: { title: '日志审计' }
+    },
+    {
+      path: '/ccswitch',
+      name: 'ccswitch',
+      component: () => import('@/views/ccswitch/CcswitchView.vue'),
+      meta: { title: 'Ike Switch' }
     }
   ]
 })

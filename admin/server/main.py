@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
-from app.api.v1 import dashboard, models, tokens, users, logs, permissions
+from app.api.v1 import dashboard, models, tokens, users, logs, permissions, ccswitch
 
 settings = get_settings()
 
@@ -34,6 +34,7 @@ app.include_router(tokens.router, prefix="/api/tokens", tags=["Tokens"])
 app.include_router(users.router, prefix="/api/users", tags=["Users"])
 app.include_router(logs.router, prefix="/api/logs", tags=["Logs"])
 app.include_router(permissions.router, prefix="/api/permissions", tags=["Permissions"])
+app.include_router(ccswitch.router, prefix="/api/ccswitch", tags=["CCSwitch"])
 
 
 @app.get("/health")

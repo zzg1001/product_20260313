@@ -8,6 +8,7 @@ import anthropic
 import pandas as pd
 from config import get_settings
 from models.skill import Skill
+from models.ccconfig import CCConfig
 from schemas.agent import SkillPlanItem
 from services.file_generator import OUTPUTS_DIR, generate_unique_filename
 from routers.logs import log_ai_start, log_ai_done, log_error
@@ -21,12 +22,35 @@ SKILLS_STORAGE_DIR = Path(__file__).parent.parent / "skills_storage"
 class AgentService:
     def __init__(self, db: Session):
         self.db = db
-        # Support Azure proxy URL if configured
-        client_kwargs = {"api_key": settings.anthropic_api_key}
-        if settings.anthropic_base_url:
-            client_kwargs["base_url"] = settings.anthropic_base_url
-        self.client = anthropic.Anthropic(**client_kwargs)
-        self.model = settings.claude_model
+        self._init_client()
+
+    def _init_client(self):
+        """初始化 Claude 客户端，优先使用数据库中的配置"""
+        # 尝试从数据库获取启用的配置
+        active_config = self.db.query(CCConfig).filter(CCConfig.is_active == True).first()
+
+        if active_config:
+            # 使用数据库配置
+            client_kwargs = {"api_key": active_config.api_key}
+            if active_config.base_url:
+                client_kwargs["base_url"] = active_config.base_url
+            self.client = anthropic.Anthropic(**client_kwargs)
+            self.model = active_config.model_id
+            self.max_tokens = active_config.max_tokens or 4096
+            self.temperature = active_config.temperature or 0.7
+            self.system_prompt_prefix = active_config.system_prompt or ""
+            print(f"[AgentService] 使用数据库配置: {active_config.name} ({active_config.model_id})")
+        else:
+            # 回退到环境变量配置
+            client_kwargs = {"api_key": settings.anthropic_api_key}
+            if settings.anthropic_base_url:
+                client_kwargs["base_url"] = settings.anthropic_base_url
+            self.client = anthropic.Anthropic(**client_kwargs)
+            self.model = settings.claude_model
+            self.max_tokens = 4096
+            self.temperature = 0.7
+            self.system_prompt_prefix = ""
+            print(f"[AgentService] 使用环境变量配置: {settings.claude_model}")
 
     def _get_skills_context(self, skill_ids: Optional[List[str]] = None, load_full_content: bool = False) -> str:
         """Get skills information for AI context

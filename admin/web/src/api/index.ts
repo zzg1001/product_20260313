@@ -170,6 +170,71 @@ export const logsApi = {
   },
 }
 
+// ============ CCSwitch API ============
+
+export interface CCConfig {
+  id: string
+  name: string
+  description?: string
+  model_id: string
+  api_key: string
+  base_url?: string
+  max_tokens?: number
+  temperature?: number
+  top_p?: number
+  system_prompt?: string
+  extra_params?: Record<string, any>
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface CCConfigCreate {
+  name: string
+  description?: string
+  model_id: string
+  api_key: string
+  base_url?: string
+  max_tokens?: number
+  temperature?: number
+  top_p?: number
+  system_prompt?: string
+  extra_params?: Record<string, any>
+}
+
+export interface TestResult {
+  success: boolean
+  message: string
+  latency_ms?: number
+  response_preview?: string
+}
+
+export const ccswitchApi = {
+  getAll: (isActive?: boolean) => {
+    const params = isActive !== undefined ? `?is_active=${isActive}` : ''
+    return request<CCConfig[]>(`/ccswitch${params}`)
+  },
+  getById: (id: string) => request<CCConfig>(`/ccswitch/${id}`),
+  create: (data: CCConfigCreate) => request<CCConfig>('/ccswitch', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  update: (id: string, data: Partial<CCConfigCreate>) => request<CCConfig>(`/ccswitch/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  delete: (id: string) => request<void>(`/ccswitch/${id}`, { method: 'DELETE' }),
+  test: (id: string) => request<TestResult>(`/ccswitch/${id}/test`, { method: 'POST' }),
+  toggle: (id: string) => request<{ id: string; is_active: boolean; message: string }>(`/ccswitch/${id}/toggle`, { method: 'POST' }),
+  copy: (id: string) => request<CCConfig>(`/ccswitch/${id}/copy`, { method: 'POST' }),
+  export: (id: string) => request<CCConfig>(`/ccswitch/${id}/export`),
+  exportAll: () => request<{ configs: CCConfig[]; exported_at: string }>('/ccswitch/export/all'),
+  import: (data: any) => request<{ imported: string[]; errors: string[]; message: string }>('/ccswitch/import', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+}
+
 // Export all APIs
 export default {
   dashboard: dashboardApi,
@@ -177,4 +242,5 @@ export default {
   tokens: tokensApi,
   users: usersApi,
   logs: logsApi,
+  ccswitch: ccswitchApi,
 }

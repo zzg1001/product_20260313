@@ -30,3 +30,12 @@ build/
 
 # Logs
 *.log
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Temp files
+temp_*.json
+insert_config.py
