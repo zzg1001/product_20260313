@@ -3,6 +3,7 @@
 支持: 文档、表格、演示、图片、代码、数据、压缩等多种类型
 """
 import os
+import re
 import json
 import uuid
 import base64
@@ -353,7 +354,17 @@ def detect_file_type(skill_name: str, skill_description: str = "", params: Dict 
                 print(f"[FileType] High-priority format detected: {ext} (keyword: {kw})")
                 return FILE_TYPES[ext]
 
-    # 4. 关键词匹配
+    # 4. 关键词匹配（使用单词边界匹配，避免子字符串误匹配）
+    # 例如: "understanding" 不应匹配 "rs"
+    def is_word_match(keyword: str, text: str) -> bool:
+        """检查关键词是否作为独立单词存在于文本中"""
+        # 对于中文关键词，直接使用子字符串匹配
+        if any('\u4e00' <= c <= '\u9fff' for c in keyword):
+            return keyword in text
+        # 对于英文关键词，使用单词边界匹配
+        pattern = r'(?:^|[\s\-_.,;:!?()[\]{}\'"/])' + re.escape(keyword) + r'(?:$|[\s\-_.,;:!?()[\]{}\'"/])'
+        return bool(re.search(pattern, text, re.IGNORECASE))
+
     best_match = None
     best_score = 0
     match_details = []
@@ -362,7 +373,7 @@ def detect_file_type(skill_name: str, skill_description: str = "", params: Dict 
         score = 0
         matched_keywords = []
         for keyword in info.keywords:
-            if keyword in combined:
+            if is_word_match(keyword, combined):
                 # 关键词越长，匹配越精确，分数越高
                 score += len(keyword)
                 matched_keywords.append(keyword)

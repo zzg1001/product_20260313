@@ -245,6 +245,229 @@ If no suitable skills are found, return an empty plan with an explanation."""
         except json.JSONDecodeError:
             return [], "Failed to parse AI response"
 
+    def _build_multimodal_content(self, text: str, file_content: str) -> list:
+        """
+        构建多模态消息内容，支持文本和图片
+
+        从 file_content 中提取图片标记 [IMAGE:mime_type:base64_data]
+        并转换为 Claude API 的多模态格式
+        """
+        import re
+
+        content_parts = []
+
+        # 添加用户文本
+        if text:
+            content_parts.append({"type": "text", "text": text})
+
+        if not file_content:
+            # 如果没有文件内容，返回简单格式
+            return text if not content_parts else content_parts
+
+        # 提取图片标记
+        image_pattern = r'\[IMAGE:(image/[^:]+):([A-Za-z0-9+/=]+)\]'
+        images = re.findall(image_pattern, file_content)
+
+        # 移除图片标记，保留其他文本内容
+        text_content = re.sub(image_pattern, '[图片已作为独立内容传递]', file_content)
+
+        if text_content.strip():
+            content_parts.append({
+                "type": "text",
+                "text": f"\n\n## 用户上传的文件数据\n{text_content}"
+            })
+
+        # 添加图片
+        for mime_type, base64_data in images:
+            content_parts.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": mime_type,
+                    "data": base64_data
+                }
+            })
+
+        return content_parts if content_parts else text
+
+    def _parse_output_format(self, ai_output: str) -> tuple[Optional[str], str]:
+        """
+        解析 AI 输出中的格式声明标记
+
+        AI 输出格式：
+        <!--OUTPUT_FORMAT:md-->
+        实际内容...
+
+        Returns:
+            (format, clean_content): 格式类型和去除标记后的内容
+        """
+        import re
+        import base64
+
+        # 匹配格式声明标记
+        pattern = r'^<!--OUTPUT_FORMAT:(\w+)-->\s*'
+        match = re.match(pattern, ai_output.strip(), re.IGNORECASE)
+
+        if match:
+            output_format = match.group(1).lower()
+            clean_content = re.sub(pattern, '', ai_output.strip(), count=1, flags=re.IGNORECASE)
+            return output_format, clean_content.strip()
+
+        # 如果没有显式声明，尝试智能检测
+        content_lower = ai_output.strip().lower()
+
+        # SVG 检测
+        if content_lower.startswith("<svg") or content_lower.startswith("<?xml") and "<svg" in content_lower:
+            return "svg", ai_output
+
+        # HTML 检测
+        if content_lower.startswith(("<!doctype", "<html")):
+            return "html", ai_output
+
+        # Markdown 检测（以 # 开头的标题）
+        if ai_output.strip().startswith("#"):
+            return "md", ai_output
+
+        # JSON 检测
+        if (content_lower.startswith("{") and content_lower.endswith("}")) or \
+           (content_lower.startswith("[") and content_lower.endswith("]")):
+            try:
+                json.loads(ai_output.strip())
+                return "json", ai_output
+            except json.JSONDecodeError:
+                pass
+
+        # 默认返回无格式
+        return None, ai_output
+
+    def _execute_image_code(self, code: str, skill_name: str) -> Optional[dict]:
+        """
+        执行图片生成代码（matplotlib/PIL）
+
+        Returns:
+            {"path": ..., "type": ..., "name": ..., "url": ...} 或 None
+        """
+        import tempfile
+        import subprocess
+
+        try:
+            # 创建临时脚本
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+                # 添加保存图片的代码
+                output_path = OUTPUTS_DIR / f"{skill_name}_{int(__import__('time').time())}.png"
+                wrapped_code = f"""
+import matplotlib
+matplotlib.use('Agg')  # 非交互式后端
+import matplotlib.pyplot as plt
+
+{code}
+
+# 自动保存图片
+plt.savefig(r'{output_path}', dpi=150, bbox_inches='tight')
+plt.close()
+print(r'{output_path}')
+"""
+                f.write(wrapped_code)
+                script_path = f.name
+
+            # 执行脚本
+            result = subprocess.run(
+                ['python', script_path],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+
+            # 清理临时文件
+            Path(script_path).unlink(missing_ok=True)
+
+            if result.returncode == 0 and output_path.exists():
+                file_size = output_path.stat().st_size
+                return {
+                    "path": str(output_path),
+                    "type": "png",
+                    "name": output_path.name,
+                    "url": f"/outputs/{output_path.name}",
+                    "size": file_size
+                }
+        except Exception as e:
+            print(f"[Image Code] Execution failed: {e}")
+
+        return None
+
+    def _execute_img_process_code(self, code: str, skill_name: str, input_paths: list) -> Optional[dict]:
+        """
+        执行图片处理代码（PIL/Pillow）
+
+        Args:
+            code: PIL 处理代码
+            skill_name: 技能名称
+            input_paths: 输入图片路径列表
+
+        Returns:
+            {"path": ..., "type": ..., "name": ..., "url": ...} 或 None
+        """
+        import tempfile
+        import subprocess
+        import time
+
+        if not input_paths:
+            print("[Img Process] No input images provided")
+            return None
+
+        # 取第一个图片作为输入
+        input_path = input_paths[0]
+        if not Path(input_path).exists():
+            print(f"[Img Process] Input file not found: {input_path}")
+            return None
+
+        try:
+            # 生成输出路径
+            timestamp = int(time.time())
+            output_filename = f"{skill_name}_processed_{timestamp}.png"
+            output_path = OUTPUTS_DIR / output_filename
+
+            # 创建临时脚本
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+                # 注入 INPUT_PATH 和 OUTPUT_PATH
+                wrapped_code = f"""
+# 系统注入的路径变量
+INPUT_PATH = r'{input_path}'
+OUTPUT_PATH = r'{output_path}'
+
+{code}
+"""
+                f.write(wrapped_code)
+                script_path = f.name
+
+            # 执行脚本
+            result = subprocess.run(
+                ['python', script_path],
+                capture_output=True,
+                text=True,
+                timeout=120  # 图片处理可能需要更长时间
+            )
+
+            # 清理临时文件
+            Path(script_path).unlink(missing_ok=True)
+
+            if result.returncode == 0 and output_path.exists():
+                file_size = output_path.stat().st_size
+                return {
+                    "path": str(output_path),
+                    "type": "png",
+                    "name": output_filename,
+                    "url": f"/outputs/{output_filename}",
+                    "size": file_size
+                }
+            else:
+                print(f"[Img Process] Execution failed: {result.stderr}")
+
+        except Exception as e:
+            print(f"[Img Process] Execution failed: {e}")
+
+        return None
+
     def execute_skill(
         self,
         skill_id: str,
@@ -334,6 +557,8 @@ If no suitable skills are found, return an empty plan with an explanation."""
                 "params": params or {},
                 # Skill folder path
                 "SKILL_DIR": skill_folder,
+                # Simulate __file__ for scripts that use it
+                "__file__": str(script_path),
                 # Data processing libraries
                 "pd": pd,
                 "pandas": pd,
@@ -415,7 +640,18 @@ If no suitable skills are found, return an empty plan with an explanation."""
             traceback.print_exc()
 
             error_msg = f"{type(e).__name__}: {str(e)}"
-            return False, None, error_msg, output
+
+            # 即使失败也返回有用的信息
+            error_result = {
+                "message": f"技能执行出错: {error_msg}",
+                "error": error_msg,
+                "stdout": output,
+                "stderr": stderr_output,
+                "_error_details": True
+            }
+
+            # 仍然返回 True，让前端能显示错误详情而不是模糊提示
+            return True, error_result, None, f"执行出错: {error_msg}\n{stderr_output}"
         finally:
             # 确保恢复标准输出
             if sys.stdout != old_stdout:
@@ -479,21 +715,7 @@ If no suitable skills are found, return an empty plan with an explanation."""
             if file_paths:
                 file_content = self._read_files_for_ai(file_paths)
 
-            # 检测期望的输出格式
-            combined_text = f"{skill.name} {skill.description or ''} {user_input} {skill_md_content[:500]}".lower()
-            output_format_hint = ""
-            if "json" in combined_text:
-                output_format_hint = "用户需要 JSON 格式输出，请直接输出有效的 JSON 数据（不要用 markdown 代码块包裹）。"
-            elif "excel" in combined_text or "xlsx" in combined_text or "表格" in combined_text:
-                output_format_hint = "用户需要表格数据，请输出 JSON 数组格式的数据，每个元素是一行记录。"
-            elif "csv" in combined_text:
-                output_format_hint = "用户需要 CSV 格式，请输出 CSV 格式的文本数据。"
-            elif any(kw in combined_text for kw in ["html", "网页", "页面", "可视化"]):
-                output_format_hint = "用户需要 HTML 格式，请生成完整的 HTML 页面。"
-            else:
-                output_format_hint = "根据任务性质选择最合适的输出格式。"
-
-            # 构建 prompt
+            # 构建 prompt - 让 AI 自己决定输出格式
             system_prompt = f"""你是一个专业的 AI 助手，正在执行名为「{skill.name}」的技能。
 
 ## 技能说明
@@ -503,58 +725,140 @@ If no suitable skills are found, return an empty plan with an explanation."""
 
 ## 任务要求
 根据技能说明和用户需求，生成高质量的输出。
-- 如果是代码相关技能，生成完整可运行的代码
-- 如果是文档相关技能，生成专业的文档内容
-- 如果是设计相关技能，生成详细的设计方案
 
-## 输出格式
-{output_format_hint}
-直接输出结果内容，不需要额外的解释或 markdown 代码块包装（除非内容本身需要）。
+## 输出格式规范（重要！）
+你必须在输出的第一行添加格式声明标记，格式为：
+<!--OUTPUT_FORMAT:文件扩展名-->
+
+### 文本类格式
+- md: Markdown 文档、报告、分析结果
+- html: 网页、可视化页面、交互式图表
+- json: 结构化数据、API 响应
+- csv: 表格数据
+- txt: 纯文本
+- py/js/ts/java 等: 代码文件
+
+### 图片/图表格式
+- svg: 矢量图（流程图、架构图、简单图表）- 直接输出 SVG 代码
+- png_code: 数据可视化图表，输出 matplotlib Python 代码，系统会自动执行生成图片
+- img_code: 图片处理/增强，输出 PIL/Pillow Python 代码，系统会自动执行处理图片
+- html: 交互式图表推荐使用 HTML + Chart.js/ECharts
+
+### 示例
+
+文档输出：
+<!--OUTPUT_FORMAT:md-->
+# 报告标题
+...内容...
+
+SVG 图表：
+<!--OUTPUT_FORMAT:svg-->
+<svg viewBox="0 0 400 300">...</svg>
+
+matplotlib 图表：
+<!--OUTPUT_FORMAT:png_code-->
+import matplotlib.pyplot as plt
+plt.plot([1,2,3], [4,5,6])
+plt.title('示例图表')
+
+图片处理（增强、滤镜、调整等）：
+<!--OUTPUT_FORMAT:img_code-->
+from PIL import Image, ImageEnhance, ImageFilter
+# INPUT_PATH 和 OUTPUT_PATH 由系统自动注入
+img = Image.open(INPUT_PATH)
+# 锐化
+enhancer = ImageEnhance.Sharpness(img)
+img = enhancer.enhance(1.5)
+# 对比度
+enhancer = ImageEnhance.Contrast(img)
+img = enhancer.enhance(1.2)
+img.save(OUTPUT_PATH)
+
+请根据任务性质选择最合适的输出格式，然后输出内容。不要输出额外的解释。
 """
 
-            # 构建用户消息，包含文件内容
+            # 构建用户消息，包含文件内容（支持多模态）
             user_message = user_input or "请根据技能说明执行默认任务"
-            if file_content:
-                user_message = f"{user_message}\n\n## 用户上传的文件数据\n{file_content}"
+            message_content = self._build_multimodal_content(user_message, file_content)
 
             # 调用 Claude API
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=16000,
                 system=system_prompt,
-                messages=[{"role": "user", "content": user_message}]
+                messages=[{"role": "user", "content": message_content}]
             )
 
             ai_output = response.content[0].text
             log_ai_done()
 
+            # 解析 AI 声明的输出格式
+            output_format, clean_content = self._parse_output_format(ai_output)
+            print(f"[AI Execute] Detected output format: {output_format}")
+
             # 根据技能类型生成适当的输出文件
             result = {
                 "message": f"AI 技能「{skill.name}」执行完成",
                 "skill_type": "ai_prompt",
-                "content": ai_output
+                "content": clean_content
             }
 
-            # 检测输出类型并生成文件
-            output_lower = ai_output.strip().lower()
-            if output_lower.startswith("<!doctype") or output_lower.startswith("<html"):
-                # HTML 输出
-                result["_html"] = ai_output
-            elif output_lower.startswith("#") or "markdown" in (skill.description or "").lower():
-                # Markdown 输出 - 直接生成文件
-                filename = generate_unique_filename(skill.name, "md")
+            # 根据 AI 声明的格式生成文件
+            if output_format == "html" or clean_content.strip().lower().startswith(("<!doctype", "<html")):
+                result["_html"] = clean_content
+            elif output_format == "png_code":
+                # 执行 matplotlib 代码生成图片
+                image_result = self._execute_image_code(clean_content, skill.name)
+                if image_result:
+                    result["_output_file"] = image_result
+                    result["content"] = f"图表已生成: {image_result['name']}"
+                else:
+                    # 执行失败，保存为 py 文件供调试
+                    filename = generate_unique_filename(skill.name, "py")
+                    filepath = OUTPUTS_DIR / filename
+                    filepath.write_text(clean_content, encoding="utf-8")
+                    result["_output_file"] = {
+                        "path": str(filepath),
+                        "type": "py",
+                        "name": filename,
+                        "url": f"/outputs/{filename}",
+                        "size": filepath.stat().st_size
+                    }
+                    result["message"] = "图表代码生成完成（执行失败，已保存为 .py 文件）"
+            elif output_format == "img_code":
+                # 执行 PIL 图片处理代码
+                image_result = self._execute_img_process_code(clean_content, skill.name, file_paths)
+                if image_result:
+                    result["_output_file"] = image_result
+                    result["content"] = f"图片处理完成: {image_result['name']}"
+                else:
+                    # 执行失败，保存为 py 文件供调试
+                    filename = generate_unique_filename(skill.name, "py")
+                    filepath = OUTPUTS_DIR / filename
+                    filepath.write_text(clean_content, encoding="utf-8")
+                    result["_output_file"] = {
+                        "path": str(filepath),
+                        "type": "py",
+                        "name": filename,
+                        "url": f"/outputs/{filename}",
+                        "size": filepath.stat().st_size
+                    }
+                    result["message"] = "图片处理代码生成完成（执行失败，已保存为 .py 文件）"
+            elif output_format and output_format != "txt":
+                # 生成对应格式的文件
+                filename = generate_unique_filename(skill.name, output_format)
                 filepath = OUTPUTS_DIR / filename
-                filepath.write_text(ai_output, encoding="utf-8")
+                filepath.write_text(clean_content, encoding="utf-8")
                 file_size = filepath.stat().st_size
                 result["_output_file"] = {
                     "path": str(filepath),
-                    "type": "md",
+                    "type": output_format,
                     "name": filename,
                     "url": f"/outputs/{filename}",
                     "size": file_size
                 }
 
-            return True, result, None, ai_output
+            return True, result, None, clean_content
 
         except Exception as e:
             import traceback
@@ -601,21 +905,7 @@ If no suitable skills are found, return an empty plan with an explanation."""
             if file_paths:
                 file_content = self._read_files_for_ai(file_paths)
 
-            # 检测期望的输出格式
-            combined_text = f"{skill.name} {skill.description or ''} {user_input}".lower()
-            output_format_hint = ""
-            if "json" in combined_text:
-                output_format_hint = "用户需要 JSON 格式输出，请直接输出有效的 JSON 数据（不要用 markdown 代码块包裹）。"
-            elif "excel" in combined_text or "xlsx" in combined_text or "表格" in combined_text:
-                output_format_hint = "用户需要表格数据，请输出 JSON 数组格式的数据，每个元素是一行记录。"
-            elif "csv" in combined_text:
-                output_format_hint = "用户需要 CSV 格式，请输出 CSV 格式的文本数据。"
-            elif any(kw in combined_text for kw in ["html", "网页", "页面", "可视化", "报告"]):
-                output_format_hint = "用户需要 HTML 格式，请生成完整的 HTML 页面。"
-            else:
-                output_format_hint = "根据任务性质选择最合适的输出格式（JSON、文本或结构化数据）。"
-
-            # 构建 prompt
+            # 构建 prompt - 让 AI 自己决定输出格式
             system_prompt = f"""你是一个专业的 AI 助手，正在执行名为「{skill.name}」的任务。
 
 ## 技能说明
@@ -623,58 +913,136 @@ If no suitable skills are found, return an empty plan with an explanation."""
 
 ## 任务要求
 根据用户需求，生成高质量的输出。
-- 如果任务涉及数据处理，请处理提供的数据并输出结果
-- 如果任务涉及数据分析，提供详细的分析结果
-- 如果任务涉及代码生成，生成完整可运行的代码
-- 如果任务涉及文档撰写，生成专业的文档内容
 
-## 输出格式
-{output_format_hint}
-直接输出结果内容，不需要额外的解释或说明文字。
+## 输出格式规范（重要！）
+你必须在输出的第一行添加格式声明标记，格式为：
+<!--OUTPUT_FORMAT:文件扩展名-->
+
+### 文本类格式
+- md: Markdown 文档、报告、分析结果
+- html: 网页、可视化页面、交互式图表
+- json: 结构化数据、API 响应
+- csv: 表格数据
+- txt: 纯文本
+- py/js/ts/java 等: 代码文件
+
+### 图片/图表格式
+- svg: 矢量图（流程图、架构图、简单图表）- 直接输出 SVG 代码
+- png_code: 数据可视化图表，输出 matplotlib Python 代码，系统会自动执行生成图片
+- img_code: 图片处理/增强，输出 PIL/Pillow Python 代码，系统会自动执行处理图片
+- html: 交互式图表推荐使用 HTML + Chart.js/ECharts
+
+### 示例
+
+文档输出：
+<!--OUTPUT_FORMAT:md-->
+# 报告标题
+...内容...
+
+SVG 图表：
+<!--OUTPUT_FORMAT:svg-->
+<svg viewBox="0 0 400 300">...</svg>
+
+matplotlib 图表：
+<!--OUTPUT_FORMAT:png_code-->
+import matplotlib.pyplot as plt
+plt.plot([1,2,3], [4,5,6])
+plt.title('示例图表')
+
+图片处理（增强、滤镜、调整等）：
+<!--OUTPUT_FORMAT:img_code-->
+from PIL import Image, ImageEnhance, ImageFilter
+# INPUT_PATH 和 OUTPUT_PATH 由系统自动注入
+img = Image.open(INPUT_PATH)
+enhancer = ImageEnhance.Sharpness(img)
+img = enhancer.enhance(1.5)
+img.save(OUTPUT_PATH)
+
+请根据任务性质选择最合适的输出格式，然后输出内容。不要输出额外的解释。
 """
 
-            # 构建用户消息，包含文件内容
+            # 构建用户消息，包含文件内容（支持多模态）
             user_message = user_input or f"请执行「{skill.name}」任务"
-            if file_content:
-                user_message = f"{user_message}\n\n## 用户上传的文件数据\n{file_content}"
+            message_content = self._build_multimodal_content(user_message, file_content)
 
             # 调用 Claude API
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=16000,
                 system=system_prompt,
-                messages=[{"role": "user", "content": user_message}]
+                messages=[{"role": "user", "content": message_content}]
             )
 
             ai_output = response.content[0].text
             log_ai_done()
 
+            # 解析 AI 声明的输出格式
+            output_format, clean_content = self._parse_output_format(ai_output)
+            print(f"[AI Fallback] Detected output format: {output_format}")
+
             # 构建结果
             result = {
                 "message": f"AI 执行「{skill.name}」完成",
                 "skill_type": "ai_fallback",
-                "content": ai_output
+                "content": clean_content
             }
 
-            # 检测输出类型
-            output_lower = ai_output.strip().lower()
-            if output_lower.startswith("<!doctype") or output_lower.startswith("<html"):
-                result["_html"] = ai_output
-            elif output_lower.startswith("#") or "markdown" in (skill.description or "").lower() or "报告" in (skill.description or ""):
-                # Markdown 输出 - 直接生成文件
-                filename = generate_unique_filename(skill.name, "md")
+            # 根据 AI 声明的格式生成文件
+            if output_format == "html" or clean_content.strip().lower().startswith(("<!doctype", "<html")):
+                result["_html"] = clean_content
+            elif output_format == "png_code":
+                # 执行 matplotlib 代码生成图片
+                image_result = self._execute_image_code(clean_content, skill.name)
+                if image_result:
+                    result["_output_file"] = image_result
+                    result["content"] = f"图表已生成: {image_result['name']}"
+                else:
+                    # 执行失败，保存为 py 文件
+                    filename = generate_unique_filename(skill.name, "py")
+                    filepath = OUTPUTS_DIR / filename
+                    filepath.write_text(clean_content, encoding="utf-8")
+                    result["_output_file"] = {
+                        "path": str(filepath),
+                        "type": "py",
+                        "name": filename,
+                        "url": f"/outputs/{filename}",
+                        "size": filepath.stat().st_size
+                    }
+                    result["message"] = "图表代码生成完成（执行失败，已保存为 .py 文件）"
+            elif output_format == "img_code":
+                # 执行 PIL 图片处理代码
+                image_result = self._execute_img_process_code(clean_content, skill.name, file_paths)
+                if image_result:
+                    result["_output_file"] = image_result
+                    result["content"] = f"图片处理完成: {image_result['name']}"
+                else:
+                    # 执行失败，保存为 py 文件供调试
+                    filename = generate_unique_filename(skill.name, "py")
+                    filepath = OUTPUTS_DIR / filename
+                    filepath.write_text(clean_content, encoding="utf-8")
+                    result["_output_file"] = {
+                        "path": str(filepath),
+                        "type": "py",
+                        "name": filename,
+                        "url": f"/outputs/{filename}",
+                        "size": filepath.stat().st_size
+                    }
+                    result["message"] = "图片处理代码生成完成（执行失败，已保存为 .py 文件）"
+            elif output_format and output_format != "txt":
+                # 生成对应格式的文件
+                filename = generate_unique_filename(skill.name, output_format)
                 filepath = OUTPUTS_DIR / filename
-                filepath.write_text(ai_output, encoding="utf-8")
+                filepath.write_text(clean_content, encoding="utf-8")
                 file_size = filepath.stat().st_size
                 result["_output_file"] = {
                     "path": str(filepath),
-                    "type": "md",
+                    "type": output_format,
                     "name": filename,
                     "url": f"/outputs/{filename}",
                     "size": file_size
                 }
 
-            return True, result, None, ai_output
+            return True, result, None, clean_content
 
         except Exception as e:
             import traceback
@@ -859,17 +1227,70 @@ def main(params):
                         pass
 
                 # 文本文件
-                elif suffix in ['.txt', '.md', '.py', '.js', '.html', '.css']:
+                elif suffix in ['.txt', '.md', '.py', '.js', '.ts', '.html', '.css', '.vue', '.jsx', '.tsx', '.xml', '.yaml', '.yml', '.log']:
                     try:
                         text = path.read_text(encoding='utf-8')
                         if len(text) > file_limit:
                             text = text[:file_limit] + "\n...[truncated]..."
-                        file_content = f"### {path.name}\n```\n{text}\n```"
+                        lang = suffix.lstrip('.') if suffix not in ['.txt', '.log'] else ''
+                        file_content = f"### {path.name}\n```{lang}\n{text}\n```"
                     except Exception:
                         pass
 
+                # 图片文件 - 转为 base64 供 AI 分析
+                elif suffix in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp']:
+                    try:
+                        import base64
+                        img_data = path.read_bytes()
+                        img_base64 = base64.b64encode(img_data).decode('utf-8')
+                        # 限制图片大小（base64 会增大约 33%）
+                        if len(img_base64) > 500000:  # ~375KB 原图
+                            file_content = f"### {path.name}\n[图片文件过大，已跳过。文件大小: {len(img_data)} bytes]"
+                        else:
+                            mime_type = {
+                                '.png': 'image/png',
+                                '.jpg': 'image/jpeg',
+                                '.jpeg': 'image/jpeg',
+                                '.gif': 'image/gif',
+                                '.bmp': 'image/bmp',
+                                '.webp': 'image/webp'
+                            }.get(suffix, 'image/png')
+                            # 存储图片信息供后续 API 调用使用
+                            file_content = f"### {path.name}\n[IMAGE:{mime_type}:{img_base64}]"
+                    except Exception as e:
+                        file_content = f"### {path.name}\n[图片读取失败: {str(e)}]"
+
+                # SVG 文件 - 作为文本处理
+                elif suffix == '.svg':
+                    try:
+                        text = path.read_text(encoding='utf-8')
+                        if len(text) > file_limit:
+                            text = text[:file_limit] + "\n...[truncated]..."
+                        file_content = f"### {path.name}\n```svg\n{text}\n```"
+                    except Exception:
+                        pass
+
+                # PDF 文件 - 尝试提取文本
+                elif suffix == '.pdf':
+                    try:
+                        import fitz  # PyMuPDF
+                        doc = fitz.open(file_path)
+                        text_parts = []
+                        for page_num in range(min(10, len(doc))):  # 最多读取前10页
+                            page = doc[page_num]
+                            text_parts.append(f"--- Page {page_num + 1} ---\n{page.get_text()}")
+                        doc.close()
+                        text = "\n".join(text_parts)
+                        if len(text) > file_limit:
+                            text = text[:file_limit] + "\n...[truncated]..."
+                        file_content = f"### {path.name}\n```\n{text}\n```"
+                    except ImportError:
+                        file_content = f"### {path.name}\n[PDF 文件，需要安装 PyMuPDF 库才能读取]"
+                    except Exception as e:
+                        file_content = f"### {path.name}\n[PDF 读取失败: {str(e)}]"
+
                 else:
-                    file_content = f"### {path.name}\n[不支持的文件类型: {suffix}]"
+                    file_content = f"### {path.name}\n[二进制文件，类型: {suffix}]"
 
                 # 添加内容并更新计数
                 if file_content:

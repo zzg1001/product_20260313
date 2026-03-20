@@ -319,11 +319,22 @@ async def upload_file(file: UploadFile = File(...)):
     """
     上传文件供技能处理使用
 
-    支持的文件类型: Excel (.xlsx, .xls), CSV (.csv)
+    支持的文件类型: 图片、文档、数据文件等
     返回文件路径，可传递给技能执行参数
     """
-    # 验证文件类型
-    allowed_extensions = {".xlsx", ".xls", ".csv", ".json", ".txt"}
+    # 验证文件类型 - 支持常见格式
+    allowed_extensions = {
+        # 数据文件
+        ".xlsx", ".xls", ".csv", ".json", ".txt", ".xml", ".yaml", ".yml",
+        # 文档
+        ".md", ".pdf", ".doc", ".docx", ".ppt", ".pptx",
+        # 图片
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".ico",
+        # 代码
+        ".py", ".js", ".ts", ".html", ".css", ".vue", ".jsx", ".tsx",
+        # 其他
+        ".zip", ".log",
+    }
     file_ext = Path(file.filename).suffix.lower() if file.filename else ""
 
     if file_ext not in allowed_extensions:
