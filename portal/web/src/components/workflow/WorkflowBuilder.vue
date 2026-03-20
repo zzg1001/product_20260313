@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, onBeforeUnmount } from 'vue'
 import { skillsApi, workflowsApi, favoritesApi, dataNotesApi, type DataNote } from '@/api'
+import config from '@/config'
 
 interface WorkflowNode {
   id: string
@@ -320,7 +321,7 @@ const filteredDataNotes = computed(() => {
 // 打开数据文件
 const openDataNote = (note: DataNote) => {
   if (note.file_url) {
-    window.open(`http://${location.hostname}:8000${note.file_url}`, '_blank')
+    window.open(`${config.serverBaseUrl}${note.file_url}`, '_blank')
   }
 }
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
+import config from '@/config'
 
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ 'update:show': [value: boolean] }>()
@@ -129,7 +130,7 @@ body{background:#0a0a0a;font-family:'Cascadia Code','Fira Code','SF Mono',Monaco
 
   // 连接 WebSocket
   const connect = () => {
-    const wsUrl = `ws://${host}:8000/api/logs/ws`
+    const wsUrl = `${config.wsUrl}/api/logs/ws`
     console.log('Connecting:', wsUrl)
 
     ws = new WebSocket(wsUrl)
@@ -169,7 +170,7 @@ body{background:#0a0a0a;font-family:'Cascadia Code','Fira Code','SF Mono',Monaco
   }
 
   clearBtn.onclick = () => {
-    fetch(`http://${host}:8000/api/logs/clear`, { method: 'DELETE' })
+    fetch(`${config.serverBaseUrl}/api/logs/clear`, { method: 'DELETE' })
     logsEl.innerHTML = '<div class="empty">日志已清空</div>'
     count = 0
     countEl.textContent = '0 条'
@@ -193,7 +194,7 @@ body{background:#0a0a0a;font-family:'Cascadia Code','Fira Code','SF Mono',Monaco
 let statusWs: WebSocket | null = null
 
 const checkConnection = () => {
-  const wsUrl = `ws://${location.hostname}:8000/api/logs/ws`
+  const wsUrl = `${config.wsUrl}/api/logs/ws`
   statusWs = new WebSocket(wsUrl)
   statusWs.onopen = () => { connected.value = true }
   statusWs.onclose = () => {

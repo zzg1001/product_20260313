@@ -10,6 +10,9 @@ export const config = {
   // Portal URL (for cross-linking)
   portalUrl: import.meta.env.VITE_PORTAL_URL || 'http://localhost:5173',
 
+  // Home page URL
+  homeUrl: import.meta.env.VITE_HOME_URL || 'http://localhost:5177',
+
   // Environment
   isDev: import.meta.env.DEV,
   isProd: import.meta.env.PROD,

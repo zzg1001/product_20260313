@@ -2,6 +2,7 @@
 import { ref, nextTick, watch, computed, onUnmounted, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { agentApi, dataNotesApi, type ChatMessage, type DataNote } from '@/api'
+import config from '@/config'
 import SlashCommandPopup from './SlashCommandPopup.vue'
 
 // 输出文件类型
@@ -197,9 +198,16 @@ const handleInputKeydown = (e: KeyboardEvent) => {
   if (showSlashPopup.value) {
     const navKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace']
     if (navKeys.includes(e.key)) {
-      // Backspace 在有查询时允许正常删除
-      if (e.key === 'Backspace' && slashQuery.value) {
-        return
+      // Backspace 处理
+      if (e.key === 'Backspace') {
+        if (slashQuery.value) {
+          // 有查询内容时，允许正常删除查询字符
+          return
+        } else {
+          // 没有查询内容时，删除 "/" 并关闭弹窗
+          closeSlashPopup()
+          return  // 允许默认行为删除 "/"
+        }
       }
       e.preventDefault()
       e.stopPropagation()
@@ -3669,9 +3677,7 @@ const openOutputFile = async (file: OutputFile) => {
   }
 
   // 构建完整URL（后端根地址，不含 /api）
-  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'
-  const baseUrl = apiBaseUrl.replace(/\/api$/, '')  // 移除 /api 后缀
-  const fullUrl = file.url.startsWith('http') ? file.url : `${baseUrl}${file.url}`
+  const fullUrl = file.url.startsWith('http') ? file.url : `${config.serverBaseUrl}${file.url}`
 
   try {
     // 下载文件
@@ -3714,7 +3720,7 @@ const openOutputFile = async (file: OutputFile) => {
     <header class="chat-header">
       <div class="header-left">
         <!-- 从首页跳转时显示返回按钮 -->
-        <a v-if="showBackHome" href="http://localhost:5177" class="back-home-link" title="返回首页">
+        <a v-if="showBackHome" :href="config.homeUrl" class="back-home-link" title="返回首页">
           <span class="cmd">$</span> cd ~/home
         </a>
         <div class="agent-avatar">

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, computed } from 'vue'
 import { dataNotesApi, type DataNote } from '@/api'
+import config from '@/config'
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -201,7 +202,7 @@ const batchDownload = () => {
         a.download = `${item.name}.zip`
       } else if (item.file_url) {
         // 普通文件
-        a.href = `http://${location.hostname}:8000${item.file_url}`
+        a.href = `${config.serverBaseUrl}${item.file_url}`
         a.download = item.name
       } else {
         return
@@ -260,7 +261,7 @@ const dblClickCard = (note: DataNote) => {
   if (note.file_type === 'folder') {
     enterFolder(note)
   } else if (note.file_url) {
-    window.open(`http://${location.hostname}:8000${note.file_url}`, '_blank')
+    window.open(`${config.serverBaseUrl}${note.file_url}`, '_blank')
   }
 }
 
@@ -399,7 +400,7 @@ const uploadFiles = async (files: File[]) => {
       // 上传文件到服务器
       const formData = new FormData()
       formData.append('file', file)
-      const res = await fetch(`http://${location.hostname}:8000/api/upload`, {
+      const res = await fetch(`${config.serverBaseUrl}/api/upload`, {
         method: 'POST',
         body: formData
       })

@@ -2,11 +2,12 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { ccswitchApi, type CCConfig } from '@/api'
+import config from '@/config'
 
 // 路由 - 返回首页功能
 const route = useRoute()
 const showBackHome = computed(() => route.query.from === 'home')
-const homeUrl = 'http://localhost:5177'
+const homeUrl = config.homeUrl
 
 // 状态
 const configs = ref<CCConfig[]>([])

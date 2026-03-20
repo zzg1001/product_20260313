@@ -2,6 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useSkillsStore } from '@/stores/skills'
 import type { Skill } from '@/api/skills'
+import config from '@/config'
 
 import HeaderNav from '@/components/HeaderNav.vue'
 import ManusBanner from '@/components/ManusBanner.vue'
@@ -34,7 +35,7 @@ function closeModal() {
 }
 
 function executeSkill(skill: Skill) {
-  window.open(`http://localhost:5173/?tab=skills&skillId=${skill.id}`, '_blank')
+  window.open(`${config.portalUrl}/?tab=skills&skillId=${skill.id}`, '_blank')
   closeModal()
 }
 
@@ -87,7 +88,7 @@ onMounted(() => {
     </main>
 
     <!-- Floating Button -->
-    <FloatingButton href="http://localhost:5173" />
+    <FloatingButton :href="config.portalUrl" />
 
     <!-- Skill Modal -->
     <SkillModal

@@ -1,19 +1,16 @@
-// Application configuration
+// Frontend Home application configuration
 
 export const config = {
-  // API base URL - change this to your backend server address
+  // API base URL
   apiBaseUrl: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api',
 
   // Server base URL (without /api)
   serverBaseUrl: import.meta.env.VITE_SERVER_BASE_URL || 'http://localhost:8000',
 
-  // WebSocket URL
-  wsUrl: import.meta.env.VITE_WS_URL || 'ws://localhost:8000',
+  // Portal URL (AI Agent / Skills)
+  portalUrl: import.meta.env.VITE_PORTAL_URL || 'http://localhost:5173',
 
-  // Home page URL
-  homeUrl: import.meta.env.VITE_HOME_URL || 'http://localhost:5177',
-
-  // Admin URL
+  // Admin URL (模型管理等)
   adminUrl: import.meta.env.VITE_ADMIN_URL || 'http://localhost:5174',
 }
 
