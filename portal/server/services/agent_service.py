@@ -468,6 +468,204 @@ OUTPUT_PATH = r'{output_path}'
 
         return None
 
+    def _execute_analysis_code(self, code: str, file_paths: list, timeout: int = 120) -> dict:
+        """
+        执行数据分析代码（通用 Python 分析）
+
+        支持库: pandas, numpy, matplotlib, seaborn, scipy, json, datetime
+        安全机制: subprocess 隔离, 超时控制, 目录沙箱
+
+        Args:
+            code: Python 分析代码
+            file_paths: 输入文件路径列表
+            timeout: 执行超时秒数
+
+        Returns:
+            {
+                'success': bool,
+                'stdout': str,
+                'stderr': str,
+                'generated_files': list,
+                'error': str (if failed)
+            }
+        """
+        import tempfile
+        import subprocess
+        import time
+        import glob
+
+        try:
+            # 生成时间戳用于输出文件
+            timestamp = int(time.time())
+            output_prefix = f"analysis_{timestamp}"
+
+            # 安全检查：禁止危险操作
+            dangerous_patterns = [
+                'os.system', 'subprocess.', 'eval(', 'exec(',
+                '__import__', 'open(', 'with open',
+                'shutil.rmtree', 'os.remove', 'os.unlink',
+                'importlib', 'compile('
+            ]
+
+            code_lower = code.lower()
+            for pattern in dangerous_patterns:
+                if pattern.lower() in code_lower:
+                    # 允许 open 用于读取
+                    if pattern in ['open(', 'with open']:
+                        # 检查是否只是读取模式
+                        if "'w'" not in code and '"w"' not in code and "'a'" not in code and '"a"' not in code:
+                            continue
+                    return {
+                        'success': False,
+                        'stdout': '',
+                        'stderr': f'安全限制：禁止使用 {pattern}',
+                        'generated_files': [],
+                        'error': f'代码包含不允许的操作: {pattern}'
+                    }
+
+            # 构建文件路径列表字符串
+            file_paths_str = repr(file_paths)
+
+            # 创建临时脚本
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+                wrapped_code = f'''
+# -*- coding: utf-8 -*-
+import sys
+import os
+
+# 设置工作目录
+os.chdir(r'{OUTPUTS_DIR}')
+
+# 系统注入的变量
+FILE_PATHS = {file_paths_str}
+OUTPUT_DIR = r'{OUTPUTS_DIR}'
+OUTPUT_PREFIX = '{output_prefix}'
+
+# 导入常用库
+import pandas as pd
+import numpy as np
+import json
+from datetime import datetime, timedelta
+
+# 可选导入
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
+    plt.rcParams['axes.unicode_minus'] = False
+except ImportError:
+    plt = None
+
+try:
+    import seaborn as sns
+except ImportError:
+    sns = None
+
+try:
+    from scipy import stats
+except ImportError:
+    stats = None
+
+# 辅助函数：保存图表
+def save_figure(name=None):
+    if plt is None:
+        return None
+    fig_name = name or f'{{OUTPUT_PREFIX}}_figure.png'
+    if not fig_name.endswith('.png'):
+        fig_name += '.png'
+    fig_path = os.path.join(OUTPUT_DIR, fig_name)
+    plt.savefig(fig_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'[GENERATED_FILE]{{fig_path}}')
+    return fig_path
+
+# 辅助函数：保存数据
+def save_data(data, name=None, format='csv'):
+    if isinstance(data, pd.DataFrame):
+        file_name = name or f'{{OUTPUT_PREFIX}}_data.{{format}}'
+        file_path = os.path.join(OUTPUT_DIR, file_name)
+        if format == 'csv':
+            data.to_csv(file_path, index=False, encoding='utf-8-sig')
+        elif format == 'excel':
+            data.to_excel(file_path, index=False)
+        elif format == 'json':
+            data.to_json(file_path, orient='records', force_ascii=False, indent=2)
+        print(f'[GENERATED_FILE]{{file_path}}')
+        return file_path
+    elif isinstance(data, (dict, list)):
+        file_name = name or f'{{OUTPUT_PREFIX}}_data.json'
+        file_path = os.path.join(OUTPUT_DIR, file_name)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+        print(f'[GENERATED_FILE]{{file_path}}')
+        return file_path
+    return None
+
+# ========== 用户代码开始 ==========
+{code}
+# ========== 用户代码结束 ==========
+'''
+                f.write(wrapped_code)
+                script_path = f.name
+
+            # 执行脚本
+            result = subprocess.run(
+                ['python', script_path],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=str(OUTPUTS_DIR)
+            )
+
+            # 清理临时文件
+            Path(script_path).unlink(missing_ok=True)
+
+            # 解析生成的文件
+            generated_files = []
+            for line in result.stdout.split('\n'):
+                if line.startswith('[GENERATED_FILE]'):
+                    file_path = line.replace('[GENERATED_FILE]', '').strip()
+                    if Path(file_path).exists():
+                        generated_files.append({
+                            'path': file_path,
+                            'name': Path(file_path).name,
+                            'url': f"/outputs/{Path(file_path).name}",
+                            'size': Path(file_path).stat().st_size
+                        })
+
+            # 清理输出中的 [GENERATED_FILE] 标记
+            clean_stdout = '\n'.join([
+                line for line in result.stdout.split('\n')
+                if not line.startswith('[GENERATED_FILE]')
+            ]).strip()
+
+            return {
+                'success': result.returncode == 0,
+                'stdout': clean_stdout,
+                'stderr': result.stderr,
+                'generated_files': generated_files,
+                'error': result.stderr if result.returncode != 0 else None
+            }
+
+        except subprocess.TimeoutExpired:
+            return {
+                'success': False,
+                'stdout': '',
+                'stderr': f'执行超时（{timeout}秒）',
+                'generated_files': [],
+                'error': f'代码执行超时，超过 {timeout} 秒限制'
+            }
+        except Exception as e:
+            import traceback
+            return {
+                'success': False,
+                'stdout': '',
+                'stderr': str(e),
+                'generated_files': [],
+                'error': f'执行错误: {str(e)}'
+            }
+
     def execute_skill(
         self,
         skill_id: str,
@@ -742,6 +940,7 @@ OUTPUT_PATH = r'{output_path}'
 - svg: 矢量图（流程图、架构图、简单图表）- 直接输出 SVG 代码
 - png_code: 数据可视化图表，输出 matplotlib Python 代码，系统会自动执行生成图片
 - img_code: 图片处理/增强，输出 PIL/Pillow Python 代码，系统会自动执行处理图片
+- analysis_code: 数据分析代码，支持 pandas/numpy/matplotlib/seaborn，系统会执行并返回结果
 - html: 交互式图表推荐使用 HTML + Chart.js/ECharts
 
 ### 示例
@@ -773,6 +972,14 @@ img = enhancer.enhance(1.5)
 enhancer = ImageEnhance.Contrast(img)
 img = enhancer.enhance(1.2)
 img.save(OUTPUT_PATH)
+
+数据分析（推荐用于数据理解任务）：
+<!--OUTPUT_FORMAT:analysis_code-->
+# FILE_PATHS 由系统自动注入，包含所有输入文件
+df = pd.read_excel(FILE_PATHS[0])
+print(df.describe())
+print(df.info())
+# 可以使用 save_figure() 保存图表，save_data(df) 保存数据
 
 请根据任务性质选择最合适的输出格式，然后输出内容。不要输出额外的解释。
 """
@@ -844,6 +1051,35 @@ img.save(OUTPUT_PATH)
                         "size": filepath.stat().st_size
                     }
                     result["message"] = "图片处理代码生成完成（执行失败，已保存为 .py 文件）"
+            elif output_format == "analysis_code":
+                # 执行数据分析代码
+                analysis_result = self._execute_analysis_code(clean_content, file_paths)
+                if analysis_result['success']:
+                    result["content"] = analysis_result['stdout']
+                    result["message"] = f"AI 技能「{skill.name}」分析完成"
+                    result["_analysis_result"] = {
+                        'stdout': analysis_result['stdout'],
+                        'generated_files': analysis_result['generated_files']
+                    }
+                    # 如果生成了文件，返回第一个作为主输出
+                    if analysis_result['generated_files']:
+                        result["_output_file"] = analysis_result['generated_files'][0]
+                        if len(analysis_result['generated_files']) > 1:
+                            result["_additional_files"] = analysis_result['generated_files'][1:]
+                else:
+                    # 执行失败，保存代码供调试
+                    filename = generate_unique_filename(skill.name, "py")
+                    filepath = OUTPUTS_DIR / filename
+                    filepath.write_text(clean_content, encoding="utf-8")
+                    result["_output_file"] = {
+                        "path": str(filepath),
+                        "type": "py",
+                        "name": filename,
+                        "url": f"/outputs/{filename}",
+                        "size": filepath.stat().st_size
+                    }
+                    result["content"] = f"代码执行失败:\n{analysis_result['stderr']}\n\n代码已保存为: {filename}"
+                    result["message"] = "数据分析代码执行失败（已保存代码供调试）"
             elif output_format and output_format != "txt":
                 # 生成对应格式的文件
                 filename = generate_unique_filename(skill.name, output_format)
@@ -930,6 +1166,7 @@ img.save(OUTPUT_PATH)
 - svg: 矢量图（流程图、架构图、简单图表）- 直接输出 SVG 代码
 - png_code: 数据可视化图表，输出 matplotlib Python 代码，系统会自动执行生成图片
 - img_code: 图片处理/增强，输出 PIL/Pillow Python 代码，系统会自动执行处理图片
+- analysis_code: 数据分析代码，支持 pandas/numpy/matplotlib/seaborn，系统会执行并返回结果
 - html: 交互式图表推荐使用 HTML + Chart.js/ECharts
 
 ### 示例
@@ -957,6 +1194,14 @@ img = Image.open(INPUT_PATH)
 enhancer = ImageEnhance.Sharpness(img)
 img = enhancer.enhance(1.5)
 img.save(OUTPUT_PATH)
+
+数据分析（推荐用于数据理解任务）：
+<!--OUTPUT_FORMAT:analysis_code-->
+# FILE_PATHS 由系统自动注入，包含所有输入文件
+df = pd.read_excel(FILE_PATHS[0])
+print(df.describe())
+print(df.info())
+# 可以使用 save_figure() 保存图表，save_data(df) 保存数据
 
 请根据任务性质选择最合适的输出格式，然后输出内容。不要输出额外的解释。
 """
@@ -1028,6 +1273,35 @@ img.save(OUTPUT_PATH)
                         "size": filepath.stat().st_size
                     }
                     result["message"] = "图片处理代码生成完成（执行失败，已保存为 .py 文件）"
+            elif output_format == "analysis_code":
+                # 执行数据分析代码
+                analysis_result = self._execute_analysis_code(clean_content, file_paths)
+                if analysis_result['success']:
+                    result["content"] = analysis_result['stdout']
+                    result["message"] = f"AI 执行「{skill.name}」分析完成"
+                    result["_analysis_result"] = {
+                        'stdout': analysis_result['stdout'],
+                        'generated_files': analysis_result['generated_files']
+                    }
+                    # 如果生成了文件，返回第一个作为主输出
+                    if analysis_result['generated_files']:
+                        result["_output_file"] = analysis_result['generated_files'][0]
+                        if len(analysis_result['generated_files']) > 1:
+                            result["_additional_files"] = analysis_result['generated_files'][1:]
+                else:
+                    # 执行失败，保存代码供调试
+                    filename = generate_unique_filename(skill.name, "py")
+                    filepath = OUTPUTS_DIR / filename
+                    filepath.write_text(clean_content, encoding="utf-8")
+                    result["_output_file"] = {
+                        "path": str(filepath),
+                        "type": "py",
+                        "name": filename,
+                        "url": f"/outputs/{filename}",
+                        "size": filepath.stat().st_size
+                    }
+                    result["content"] = f"代码执行失败:\n{analysis_result['stderr']}\n\n代码已保存为: {filename}"
+                    result["message"] = "数据分析代码执行失败（已保存代码供调试）"
             elif output_format and output_format != "txt":
                 # 生成对应格式的文件
                 filename = generate_unique_filename(skill.name, output_format)
@@ -1153,20 +1427,28 @@ def main(params):
 '''
         return code + wrapper
 
-    def _read_files_for_ai(self, file_paths: list, max_total_chars: int = 150000) -> str:
+    def _read_files_for_ai(self, file_paths: list, max_total_chars: int = 250000) -> str:
         """
-        读取上传的文件内容，转换为 AI 可以处理的文本格式
+        读取上传的文件内容，转换为 AI 可以处理的文本格式（增强版）
 
         Args:
             file_paths: 文件路径列表
-            max_total_chars: 总字符数限制（默认150000，约50k tokens，留出余量给system prompt）
+            max_total_chars: 总字符数限制（默认250000，约80k tokens）
+
+        增强功能:
+        - Excel 多 Sheet 支持
+        - 字段类型信息
+        - 数值字段统计摘要
+        - 大文件智能采样（头部 + 尾部 + 随机样本）
         """
+        import numpy as np
+
         contents = []
         total_chars = 0
 
         # 根据文件数量动态调整每个文件的限制
         num_files = len(file_paths)
-        per_file_limit = max(5000, max_total_chars // max(num_files, 1))
+        per_file_limit = max(10000, max_total_chars // max(num_files, 1))
 
         for file_path in file_paths:
             # 检查是否已超过总限制
@@ -1186,45 +1468,36 @@ def main(params):
 
                 file_content = ""
 
-                # Excel 文件
+                # Excel 文件 - 增强版：多 Sheet 支持 + 统计信息
                 if suffix in ['.xlsx', '.xls']:
                     try:
-                        df = pd.read_excel(file_path)
-                        # 动态限制行数
-                        max_rows = min(200, max(50, file_limit // 200))  # 估算每行约200字符
-                        if len(df) > max_rows:
-                            df = df.head(max_rows)
-                            file_content = f"### {path.name} (前{max_rows}行，共{len(df)}行)\n```\n{df.to_string()}\n```"
-                        else:
-                            file_content = f"### {path.name}\n```\n{df.to_string()}\n```"
-                    except Exception:
-                        pass
+                        file_content = self._read_excel_enhanced(file_path, path.name, file_limit)
+                    except Exception as e:
+                        file_content = f"### {path.name}\n[Excel 读取失败: {str(e)}]"
 
-                # CSV 文件
+                # CSV 文件 - 增强版：统计信息 + 智能采样
                 elif suffix == '.csv':
                     try:
-                        df = pd.read_csv(file_path)
-                        max_rows = min(200, max(50, file_limit // 200))
-                        if len(df) > max_rows:
-                            df = df.head(max_rows)
-                            file_content = f"### {path.name} (前{max_rows}行，共{len(df)}行)\n```\n{df.to_string()}\n```"
-                        else:
-                            file_content = f"### {path.name}\n```\n{df.to_string()}\n```"
-                    except Exception:
-                        pass
+                        file_content = self._read_csv_enhanced(file_path, path.name, file_limit)
+                    except Exception as e:
+                        file_content = f"### {path.name}\n[CSV 读取失败: {str(e)}]"
 
                 # JSON 文件
                 elif suffix == '.json':
                     try:
-                        import json
                         with open(file_path, 'r', encoding='utf-8') as f:
                             data = json.load(f)
-                        json_str = json.dumps(data, ensure_ascii=False, indent=2)
-                        if len(json_str) > file_limit:
-                            json_str = json_str[:file_limit] + "\n...[truncated]..."
-                        file_content = f"### {path.name}\n```json\n{json_str}\n```"
-                    except Exception:
-                        pass
+                        # 如果是数组，尝试用 DataFrame 处理
+                        if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+                            df = pd.DataFrame(data)
+                            file_content = self._format_dataframe_enhanced(df, path.name, "json_array", file_limit)
+                        else:
+                            json_str = json.dumps(data, ensure_ascii=False, indent=2)
+                            if len(json_str) > file_limit:
+                                json_str = json_str[:file_limit] + "\n...[truncated]..."
+                            file_content = f"### {path.name}\n```json\n{json_str}\n```"
+                    except Exception as e:
+                        file_content = f"### {path.name}\n[JSON 读取失败: {str(e)}]"
 
                 # 文本文件
                 elif suffix in ['.txt', '.md', '.py', '.js', '.ts', '.html', '.css', '.vue', '.jsx', '.tsx', '.xml', '.yaml', '.yml', '.log']:
@@ -1304,6 +1577,156 @@ def main(params):
         result = "\n\n".join(contents)
         if total_chars >= max_total_chars * 0.9:  # 接近限制时提示
             result += f"\n\n[注意：文件内容已截断以避免超过处理限制。总计 {total_chars} 字符，{len(file_paths)} 个文件]"
+
+        return result
+
+    def _read_excel_enhanced(self, file_path: str, file_name: str, char_limit: int) -> str:
+        """
+        增强版 Excel 读取：多 Sheet 支持 + 字段类型 + 统计信息
+        """
+        import numpy as np
+
+        result_parts = []
+        total_chars = 0
+
+        # 读取所有 Sheet
+        excel_file = pd.ExcelFile(file_path)
+        sheet_names = excel_file.sheet_names
+
+        for sheet_name in sheet_names:
+            if total_chars >= char_limit:
+                result_parts.append(f"\n[已达到字符限制，跳过剩余 Sheet]")
+                break
+
+            try:
+                df = pd.read_excel(file_path, sheet_name=sheet_name)
+                remaining = char_limit - total_chars
+                sheet_content = self._format_dataframe_enhanced(
+                    df, f"{file_name} - Sheet: {sheet_name}", "excel", remaining
+                )
+                result_parts.append(sheet_content)
+                total_chars += len(sheet_content)
+            except Exception as e:
+                result_parts.append(f"### {file_name} - Sheet: {sheet_name}\n[读取失败: {str(e)}]")
+
+        return "\n\n".join(result_parts)
+
+    def _read_csv_enhanced(self, file_path: str, file_name: str, char_limit: int) -> str:
+        """
+        增强版 CSV 读取：字段类型 + 统计信息 + 智能采样
+        """
+        df = pd.read_csv(file_path)
+        return self._format_dataframe_enhanced(df, file_name, "csv", char_limit)
+
+    def _format_dataframe_enhanced(self, df: pd.DataFrame, file_name: str, format_type: str, char_limit: int) -> str:
+        """
+        格式化 DataFrame 为增强版文本输出
+
+        包含：
+        - 基本信息（行数 x 列数）
+        - 字段类型信息
+        - 数值字段统计摘要
+        - 数据预览（智能采样）
+        """
+        import numpy as np
+
+        parts = []
+        total_rows, total_cols = df.shape
+
+        # 1. 标题和基本信息
+        parts.append(f"### {file_name} ({total_rows}行 x {total_cols}列)")
+
+        # 2. 字段类型信息
+        dtype_info = ", ".join([f"{col}:{df[col].dtype}" for col in df.columns[:15]])
+        if len(df.columns) > 15:
+            dtype_info += f"... (+{len(df.columns) - 15} 列)"
+        parts.append(f"\n**字段类型:** {dtype_info}")
+
+        # 3. 统计摘要表格
+        summary_lines = ["| 字段 | 类型 | 非空 | 唯一值 | 示例/统计 |", "|------|------|------|--------|-----------|"]
+
+        for col in df.columns[:20]:  # 最多显示20个字段
+            dtype = str(df[col].dtype)
+            non_null = df[col].notna().sum()
+            unique_count = df[col].nunique()
+
+            # 根据类型生成不同的示例/统计信息
+            if pd.api.types.is_numeric_dtype(df[col]):
+                # 数值类型：显示 min/max/mean
+                try:
+                    col_min = df[col].min()
+                    col_max = df[col].max()
+                    col_mean = df[col].mean()
+                    if pd.api.types.is_integer_dtype(df[col]):
+                        example = f"min={col_min}, max={col_max}, mean={col_mean:.1f}"
+                    else:
+                        example = f"min={col_min:.2f}, max={col_max:.2f}, mean={col_mean:.2f}"
+                except Exception:
+                    example = str(df[col].dropna().head(3).tolist())[:30]
+            elif pd.api.types.is_datetime64_any_dtype(df[col]):
+                # 日期类型：显示范围
+                try:
+                    date_min = df[col].min()
+                    date_max = df[col].max()
+                    example = f"{date_min} ~ {date_max}"
+                except Exception:
+                    example = str(df[col].dropna().head(2).tolist())[:30]
+            else:
+                # 其他类型：显示前几个示例值
+                sample_vals = df[col].dropna().head(3).tolist()
+                example = ", ".join([str(v)[:15] for v in sample_vals])
+                if len(example) > 35:
+                    example = example[:35] + "..."
+
+            summary_lines.append(f"| {col[:20]} | {dtype} | {non_null} | {unique_count} | {example} |")
+
+        if len(df.columns) > 20:
+            summary_lines.append(f"| ... | ... | ... | ... | (+{len(df.columns) - 20} 列) |")
+
+        parts.append("\n**统计摘要:**")
+        parts.append("\n".join(summary_lines))
+
+        # 4. 数据预览 - 智能采样
+        max_preview_rows = min(500, max(100, char_limit // 300))  # 根据字符限制调整
+
+        if total_rows <= max_preview_rows:
+            # 数据量小，全部显示
+            preview_df = df
+            preview_note = ""
+        else:
+            # 智能采样：头部 + 尾部 + 随机样本
+            head_rows = min(100, max_preview_rows // 3)
+            tail_rows = min(50, max_preview_rows // 6)
+            random_rows = max_preview_rows - head_rows - tail_rows
+
+            head_df = df.head(head_rows)
+            tail_df = df.tail(tail_rows)
+
+            # 随机采样中间部分
+            middle_indices = range(head_rows, total_rows - tail_rows)
+            if len(middle_indices) > random_rows and random_rows > 0:
+                sample_indices = sorted(np.random.choice(list(middle_indices), random_rows, replace=False))
+                middle_df = df.iloc[sample_indices]
+            else:
+                middle_df = pd.DataFrame()
+
+            # 合并预览数据
+            preview_parts = [head_df]
+            if not middle_df.empty:
+                preview_parts.append(middle_df)
+            preview_parts.append(tail_df)
+            preview_df = pd.concat(preview_parts, ignore_index=False)
+
+            preview_note = f" (智能采样: 前{head_rows}行 + 随机{len(middle_df)}行 + 后{tail_rows}行)"
+
+        parts.append(f"\n**数据预览{preview_note}:**")
+        parts.append(f"```\n{preview_df.to_string(max_rows=max_preview_rows)}\n```")
+
+        result = "\n".join(parts)
+
+        # 如果结果超过限制，截断
+        if len(result) > char_limit:
+            result = result[:char_limit] + "\n...[truncated]..."
 
         return result
 

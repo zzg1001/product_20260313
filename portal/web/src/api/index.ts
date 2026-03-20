@@ -360,6 +360,62 @@ export interface UploadResponse {
   type: string
 }
 
+// ============ Analyze API Types ============
+
+export interface AnalyzeRequest {
+  file_paths: string[]
+  context?: string
+  skill_id?: string
+  max_iterations?: number
+}
+
+export interface AnalyzeCodeResult {
+  code: string
+  success: boolean
+  stdout: string
+  stderr?: string
+  generated_files?: Array<{
+    path: string
+    name: string
+    url: string
+    size: number
+  }>
+}
+
+export interface AnalyzeResponse {
+  success: boolean
+  iterations: AnalyzeCodeResult[]
+  final_report?: string
+  generated_files?: Array<{
+    path: string
+    name: string
+    url: string
+    size: number
+  }>
+  error?: string
+}
+
+export interface AnalyzeStreamEvent {
+  type: 'code' | 'result' | 'thinking' | 'error' | 'done'
+  data: {
+    // For 'code' event
+    code?: string
+    iteration?: number
+    // For 'result' event
+    success?: boolean
+    stdout?: string
+    stderr?: string
+    generated_files?: Array<{ path: string; name: string; url: string; size: number }>
+    // For 'thinking' event
+    content?: string
+    // For 'error' event
+    error?: string
+    // For 'done' event
+    final_report?: string
+    iterations?: number
+  }
+}
+
 export const agentApi = {
   // Chat (non-streaming)
   chat: (data: ChatRequest) =>
@@ -467,6 +523,102 @@ export const agentApi = {
 
     return response.json()
   },
+
+  // Preview file content (table, json, markdown, etc.)
+  preview: async (filePath: string, maxRows: number = 100): Promise<FilePreviewResponse> => {
+    // 移除开头的斜杠
+    const cleanPath = filePath.startsWith('/') ? filePath.slice(1) : filePath
+    const response = await fetch(`${API_BASE_URL}/agent/preview/${cleanPath}?max_rows=${maxRows}`)
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Preview failed' }))
+      throw new Error(error.detail || `HTTP error! status: ${response.status}`)
+    }
+
+    return response.json()
+  },
+
+  // Analyze data (streaming via SSE) - iterative analysis with code execution
+  analyzeStream: async function* (
+    data: AnalyzeRequest,
+    signal?: AbortSignal
+  ): AsyncGenerator<AnalyzeStreamEvent> {
+    const url = `${API_BASE_URL}/agent/analyze`
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+      signal,
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('No response body')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        let currentEvent = 'message'
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim()
+          } else if (line.startsWith('data: ')) {
+            const jsonData = line.slice(6)
+            try {
+              const parsed = JSON.parse(jsonData)
+              yield { type: currentEvent as AnalyzeStreamEvent['type'], data: parsed }
+            } catch (e) {
+              // Ignore parse errors for malformed chunks
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  },
+
+  // Analyze data (sync) - wait for all iterations to complete
+  analyzeSync: (data: AnalyzeRequest) =>
+    request<AnalyzeResponse>('/agent/analyze/sync', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+}
+
+// File preview response types
+export interface FilePreviewResponse {
+  type: 'table' | 'json' | 'markdown' | 'html' | 'image' | 'code' | 'file'
+  format: string
+  file_name: string
+  file_size: number
+  // For table type
+  columns?: string[]
+  data?: string[][]
+  total_rows?: number
+  displayed_rows?: number
+  // For json/markdown/html/code type
+  content?: any
+  // For image type
+  url?: string
+  // For file type
+  download_url?: string
 }
 
 // ============ Workflows API ============

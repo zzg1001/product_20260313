@@ -9,7 +9,8 @@ from database import get_db
 from schemas.agent import (
     ChatRequest, ChatResponse,
     PlanRequest, PlanResponse,
-    ExecuteRequest, ExecuteResponse, OutputFile
+    ExecuteRequest, ExecuteResponse, OutputFile,
+    AnalyzeRequest, AnalyzeResponse, AnalyzeCodeResult
 )
 from services.agent_service import AgentService
 from services.file_generator import generate_output_file
@@ -366,3 +367,545 @@ async def upload_file(file: UploadFile = File(...)):
         "size": len(content),
         "type": file_ext.lstrip(".")
     }
+
+
+@router.get("/preview/{file_path:path}")
+async def preview_file(file_path: str, max_rows: int = 100):
+    """
+    预览文件内容
+
+    - Excel/CSV: 返回表格数据（最多 max_rows 行）
+    - JSON: 返回 JSON 内容
+    - 图片: 返回图片信息
+    - 其他: 返回文件信息
+    """
+    import pandas as pd
+
+    # 处理路径 - 支持 /outputs/xxx 和 /uploads/xxx 格式
+    base_dir = Path(__file__).parent.parent
+    if file_path.startswith("outputs/"):
+        full_path = base_dir / file_path
+    elif file_path.startswith("uploads/"):
+        full_path = base_dir / file_path
+    elif file_path.startswith("/outputs/"):
+        full_path = base_dir / file_path.lstrip("/")
+    elif file_path.startswith("/uploads/"):
+        full_path = base_dir / file_path.lstrip("/")
+    else:
+        # 直接使用文件名，尝试在 outputs 目录查找
+        full_path = base_dir / "outputs" / file_path
+
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
+
+    suffix = full_path.suffix.lower()
+    file_size = full_path.stat().st_size
+
+    # Excel 文件
+    if suffix in ['.xlsx', '.xls']:
+        try:
+            df = pd.read_excel(full_path)
+            total_rows = len(df)
+            df = df.head(max_rows)
+            return {
+                "type": "table",
+                "format": "excel",
+                "columns": df.columns.tolist(),
+                "data": df.fillna("").astype(str).values.tolist(),
+                "total_rows": total_rows,
+                "displayed_rows": len(df),
+                "file_name": full_path.name,
+                "file_size": file_size
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"解析 Excel 失败: {str(e)}")
+
+    # CSV 文件
+    elif suffix == '.csv':
+        try:
+            df = pd.read_csv(full_path)
+            total_rows = len(df)
+            df = df.head(max_rows)
+            return {
+                "type": "table",
+                "format": "csv",
+                "columns": df.columns.tolist(),
+                "data": df.fillna("").astype(str).values.tolist(),
+                "total_rows": total_rows,
+                "displayed_rows": len(df),
+                "file_name": full_path.name,
+                "file_size": file_size
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"解析 CSV 失败: {str(e)}")
+
+    # JSON 文件
+    elif suffix == '.json':
+        try:
+            content = full_path.read_text(encoding='utf-8')
+            data = json.loads(content)
+            # 如果是数组，尝试转换为表格
+            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+                df = pd.DataFrame(data)
+                total_rows = len(df)
+                df = df.head(max_rows)
+                return {
+                    "type": "table",
+                    "format": "json_array",
+                    "columns": df.columns.tolist(),
+                    "data": df.fillna("").astype(str).values.tolist(),
+                    "total_rows": total_rows,
+                    "displayed_rows": len(df),
+                    "file_name": full_path.name,
+                    "file_size": file_size
+                }
+            else:
+                return {
+                    "type": "json",
+                    "format": "json",
+                    "content": data,
+                    "file_name": full_path.name,
+                    "file_size": file_size
+                }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"解析 JSON 失败: {str(e)}")
+
+    # Markdown 文件
+    elif suffix == '.md':
+        try:
+            content = full_path.read_text(encoding='utf-8')
+            return {
+                "type": "markdown",
+                "format": "md",
+                "content": content,
+                "file_name": full_path.name,
+                "file_size": file_size
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"读取 Markdown 失败: {str(e)}")
+
+    # HTML 文件
+    elif suffix in ['.html', '.htm']:
+        try:
+            content = full_path.read_text(encoding='utf-8')
+            return {
+                "type": "html",
+                "format": "html",
+                "content": content,
+                "file_name": full_path.name,
+                "file_size": file_size
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"读取 HTML 失败: {str(e)}")
+
+    # 图片文件
+    elif suffix in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg']:
+        return {
+            "type": "image",
+            "format": suffix.lstrip('.'),
+            "url": f"/{file_path}" if not file_path.startswith('/') else file_path,
+            "file_name": full_path.name,
+            "file_size": file_size
+        }
+
+    # 代码文件
+    elif suffix in ['.py', '.js', '.ts', '.java', '.go', '.rs', '.cpp', '.c', '.vue', '.jsx', '.tsx']:
+        try:
+            content = full_path.read_text(encoding='utf-8')
+            return {
+                "type": "code",
+                "format": suffix.lstrip('.'),
+                "content": content,
+                "file_name": full_path.name,
+                "file_size": file_size
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"读取代码文件失败: {str(e)}")
+
+    # 其他文件
+    else:
+        return {
+            "type": "file",
+            "format": suffix.lstrip('.') if suffix else "unknown",
+            "file_name": full_path.name,
+            "file_size": file_size,
+            "download_url": f"/{file_path}" if not file_path.startswith('/') else file_path
+        }
+
+
+@router.post("/analyze")
+async def analyze_data_stream(request: AnalyzeRequest, db: Session = Depends(get_db)):
+    """
+    迭代数据分析端点（SSE 流式返回）
+
+    AI 可以多轮执行代码，逐步深入分析数据：
+    1. AI 输出代码 → 执行 → 返回结果
+    2. AI 看到结果 → 继续分析或输出最终报告
+    3. 最多 max_iterations 轮迭代
+
+    SSE 事件类型:
+    - code: AI 生成的代码
+    - result: 代码执行结果
+    - thinking: AI 的思考过程
+    - error: 错误信息
+    - done: 分析完成，包含最终报告
+    """
+    import re
+
+    log_session_start(
+        api_name="POST /agent/analyze",
+        api_desc="迭代数据分析，AI多轮执行代码进行深度分析",
+        source="数据分析",
+        user_input=request.context
+    )
+
+    service = AgentService(db)
+
+    async def generate():
+        try:
+            iterations = []
+            all_generated_files = []
+            max_iterations = min(request.max_iterations or 5, 10)
+
+            # 读取文件内容供 AI 参考
+            file_content = service._read_files_for_ai(request.file_paths)
+
+            # 构建初始对话历史
+            conversation = []
+
+            # 系统提示
+            system_prompt = f"""你是一个专业的数据分析师。你需要通过执行 Python 代码来分析用户提供的数据文件。
+
+## 工作模式
+你将进行迭代式分析：
+1. 输出分析代码（使用 <!--ANALYSIS_CODE:--> 标记）
+2. 系统执行代码并返回结果
+3. 你根据结果继续分析或输出最终报告
+
+## 代码输出格式
+当你需要执行代码时，使用以下格式：
+<!--ANALYSIS_CODE:-->
+# 你的 Python 代码
+import pandas as pd
+df = pd.read_excel(FILE_PATHS[0])
+print(df.describe())
+<!--END_CODE-->
+
+## 可用变量和函数
+- FILE_PATHS: 输入文件路径列表
+- OUTPUT_DIR: 输出目录
+- OUTPUT_PREFIX: 输出文件前缀
+- save_figure(name=None): 保存 matplotlib 图表
+- save_data(data, name=None, format='csv'): 保存数据（支持 DataFrame, dict, list）
+- 已导入: pandas as pd, numpy as np, matplotlib.pyplot as plt, seaborn as sns (如果可用)
+
+## 分析策略
+1. 首先了解数据结构（shape, columns, dtypes）
+2. 检查缺失值和异常值
+3. 进行统计分析
+4. 生成可视化图表
+5. 得出洞察和结论
+
+## 最终报告格式
+当分析完成时，输出最终报告（使用 <!--FINAL_REPORT:--> 标记）：
+<!--FINAL_REPORT:-->
+# 数据分析报告
+## 1. 数据概况
+...
+## 2. 关键发现
+...
+## 3. 详细分析
+...
+## 4. 结论与建议
+...
+<!--END_REPORT-->
+
+## 文件数据预览
+{file_content[:50000]}
+"""
+
+            # 用户初始请求
+            user_request = request.context or "请分析这些数据文件，提供全面的数据理解报告"
+            conversation.append({"role": "user", "content": user_request})
+
+            # 迭代分析循环
+            for iteration in range(max_iterations):
+                log_ai_start(f"迭代 {iteration + 1}")
+
+                # 调用 AI
+                response = service.client.messages.create(
+                    model=service.model,
+                    max_tokens=8000,
+                    system=system_prompt,
+                    messages=conversation
+                )
+
+                ai_response = response.content[0].text
+                conversation.append({"role": "assistant", "content": ai_response})
+
+                log_ai_done()
+
+                # 检查是否有最终报告
+                final_report_match = re.search(
+                    r'<!--FINAL_REPORT:-->\s*(.*?)\s*<!--END_REPORT-->',
+                    ai_response,
+                    re.DOTALL
+                )
+
+                if final_report_match:
+                    final_report = final_report_match.group(1).strip()
+                    yield f"event: done\ndata: {json.dumps({'final_report': final_report, 'iterations': len(iterations), 'generated_files': all_generated_files}, ensure_ascii=False)}\n\n"
+                    log_session_end(True, f"分析完成，{len(iterations)} 轮迭代")
+                    return
+
+                # 检查是否有分析代码
+                code_match = re.search(
+                    r'<!--ANALYSIS_CODE:-->\s*(.*?)\s*<!--END_CODE-->',
+                    ai_response,
+                    re.DOTALL
+                )
+
+                if code_match:
+                    code = code_match.group(1).strip()
+
+                    # 发送代码事件
+                    yield f"event: code\ndata: {json.dumps({'code': code, 'iteration': iteration + 1}, ensure_ascii=False)}\n\n"
+
+                    # 执行代码
+                    exec_result = service._execute_analysis_code(code, request.file_paths)
+
+                    # 记录迭代结果
+                    iteration_result = {
+                        'code': code,
+                        'success': exec_result['success'],
+                        'stdout': exec_result['stdout'],
+                        'stderr': exec_result.get('stderr', ''),
+                        'generated_files': exec_result.get('generated_files', [])
+                    }
+                    iterations.append(iteration_result)
+
+                    # 收集生成的文件
+                    if exec_result.get('generated_files'):
+                        all_generated_files.extend(exec_result['generated_files'])
+
+                    # 发送结果事件
+                    yield f"event: result\ndata: {json.dumps({'success': exec_result['success'], 'stdout': exec_result['stdout'][:5000], 'stderr': exec_result.get('stderr', '')[:1000], 'generated_files': exec_result.get('generated_files', []), 'iteration': iteration + 1}, ensure_ascii=False)}\n\n"
+
+                    # 将执行结果添加到对话
+                    if exec_result['success']:
+                        result_message = f"代码执行成功。输出结果：\n{exec_result['stdout'][:10000]}"
+                        if exec_result.get('generated_files'):
+                            result_message += f"\n\n生成的文件：{[f['name'] for f in exec_result['generated_files']]}"
+                    else:
+                        result_message = f"代码执行失败。错误信息：\n{exec_result.get('stderr', exec_result.get('error', '未知错误'))}"
+
+                    conversation.append({"role": "user", "content": result_message})
+
+                else:
+                    # AI 没有输出代码也没有最终报告，发送思考内容
+                    thinking_content = ai_response[:2000]
+                    yield f"event: thinking\ndata: {json.dumps({'content': thinking_content, 'iteration': iteration + 1}, ensure_ascii=False)}\n\n"
+
+                    # 提示 AI 继续
+                    conversation.append({"role": "user", "content": "请继续分析，输出分析代码或最终报告。"})
+
+            # 达到最大迭代次数
+            yield f"event: done\ndata: {json.dumps({'final_report': '分析达到最大迭代次数限制。请查看各轮迭代结果。', 'iterations': len(iterations), 'generated_files': all_generated_files}, ensure_ascii=False)}\n\n"
+            log_session_end(True, f"达到最大迭代次数 {max_iterations}")
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            log_error(f"分析失败: {str(e)[:50]}")
+            yield f"event: error\ndata: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+            log_session_end(False, str(e)[:50])
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@router.post("/analyze/sync", response_model=AnalyzeResponse)
+async def analyze_data_sync(request: AnalyzeRequest, db: Session = Depends(get_db)):
+    """
+    迭代数据分析端点（同步返回）
+
+    与流式版本功能相同，但等待所有迭代完成后一次性返回结果。
+    适用于不需要实时反馈的场景。
+    """
+    import re
+
+    log_session_start(
+        api_name="POST /agent/analyze/sync",
+        api_desc="迭代数据分析（同步），AI多轮执行代码进行深度分析",
+        source="数据分析",
+        user_input=request.context
+    )
+
+    service = AgentService(db)
+
+    try:
+        iterations = []
+        all_generated_files = []
+        max_iterations = min(request.max_iterations or 5, 10)
+
+        # 读取文件内容供 AI 参考
+        file_content = service._read_files_for_ai(request.file_paths)
+
+        # 构建初始对话历史
+        conversation = []
+
+        # 系统提示（与流式版本相同）
+        system_prompt = f"""你是一个专业的数据分析师。你需要通过执行 Python 代码来分析用户提供的数据文件。
+
+## 工作模式
+你将进行迭代式分析：
+1. 输出分析代码（使用 <!--ANALYSIS_CODE:--> 标记）
+2. 系统执行代码并返回结果
+3. 你根据结果继续分析或输出最终报告
+
+## 代码输出格式
+当你需要执行代码时，使用以下格式：
+<!--ANALYSIS_CODE:-->
+# 你的 Python 代码
+import pandas as pd
+df = pd.read_excel(FILE_PATHS[0])
+print(df.describe())
+<!--END_CODE-->
+
+## 可用变量和函数
+- FILE_PATHS: 输入文件路径列表
+- OUTPUT_DIR: 输出目录
+- OUTPUT_PREFIX: 输出文件前缀
+- save_figure(name=None): 保存 matplotlib 图表
+- save_data(data, name=None, format='csv'): 保存数据（支持 DataFrame, dict, list）
+- 已导入: pandas as pd, numpy as np, matplotlib.pyplot as plt, seaborn as sns (如果可用)
+
+## 分析策略
+1. 首先了解数据结构（shape, columns, dtypes）
+2. 检查缺失值和异常值
+3. 进行统计分析
+4. 生成可视化图表
+5. 得出洞察和结论
+
+## 最终报告格式
+当分析完成时，输出最终报告（使用 <!--FINAL_REPORT:--> 标记）：
+<!--FINAL_REPORT:-->
+# 数据分析报告
+## 1. 数据概况
+...
+## 2. 关键发现
+...
+## 3. 详细分析
+...
+## 4. 结论与建议
+...
+<!--END_REPORT-->
+
+## 文件数据预览
+{file_content[:50000]}
+"""
+
+        # 用户初始请求
+        user_request = request.context or "请分析这些数据文件，提供全面的数据理解报告"
+        conversation.append({"role": "user", "content": user_request})
+
+        final_report = None
+
+        # 迭代分析循环
+        for iteration in range(max_iterations):
+            log_ai_start(f"迭代 {iteration + 1}")
+
+            # 调用 AI
+            response = service.client.messages.create(
+                model=service.model,
+                max_tokens=8000,
+                system=system_prompt,
+                messages=conversation
+            )
+
+            ai_response = response.content[0].text
+            conversation.append({"role": "assistant", "content": ai_response})
+
+            log_ai_done()
+
+            # 检查是否有最终报告
+            final_report_match = re.search(
+                r'<!--FINAL_REPORT:-->\s*(.*?)\s*<!--END_REPORT-->',
+                ai_response,
+                re.DOTALL
+            )
+
+            if final_report_match:
+                final_report = final_report_match.group(1).strip()
+                break
+
+            # 检查是否有分析代码
+            code_match = re.search(
+                r'<!--ANALYSIS_CODE:-->\s*(.*?)\s*<!--END_CODE-->',
+                ai_response,
+                re.DOTALL
+            )
+
+            if code_match:
+                code = code_match.group(1).strip()
+
+                # 执行代码
+                exec_result = service._execute_analysis_code(code, request.file_paths)
+
+                # 记录迭代结果
+                iteration_result = AnalyzeCodeResult(
+                    code=code,
+                    success=exec_result['success'],
+                    stdout=exec_result['stdout'],
+                    stderr=exec_result.get('stderr', ''),
+                    generated_files=exec_result.get('generated_files', [])
+                )
+                iterations.append(iteration_result)
+
+                # 收集生成的文件
+                if exec_result.get('generated_files'):
+                    all_generated_files.extend(exec_result['generated_files'])
+
+                # 将执行结果添加到对话
+                if exec_result['success']:
+                    result_message = f"代码执行成功。输出结果：\n{exec_result['stdout'][:10000]}"
+                    if exec_result.get('generated_files'):
+                        result_message += f"\n\n生成的文件：{[f['name'] for f in exec_result['generated_files']]}"
+                else:
+                    result_message = f"代码执行失败。错误信息：\n{exec_result.get('stderr', exec_result.get('error', '未知错误'))}"
+
+                conversation.append({"role": "user", "content": result_message})
+
+            else:
+                # AI 没有输出代码也没有最终报告，提示继续
+                conversation.append({"role": "user", "content": "请继续分析，输出分析代码或最终报告。"})
+
+        # 如果没有最终报告，生成一个总结
+        if not final_report:
+            final_report = "分析达到最大迭代次数限制。请查看各轮迭代结果获取分析详情。"
+
+        log_session_end(True, f"分析完成，{len(iterations)} 轮迭代")
+
+        return AnalyzeResponse(
+            success=True,
+            iterations=iterations,
+            final_report=final_report,
+            generated_files=all_generated_files
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        log_error(f"分析失败: {str(e)[:50]}")
+        log_session_end(False, str(e)[:50])
+        return AnalyzeResponse(
+            success=False,
+            error=str(e)
+        )

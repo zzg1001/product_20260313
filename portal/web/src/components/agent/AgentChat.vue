@@ -162,6 +162,26 @@ const dataNotesForSlash = ref<DataNote[]>([])
 // "/" 补全弹窗
 const slashPopupRef = ref<InstanceType<typeof SlashCommandPopup> | null>(null)
 const showSlashPopup = ref(false)
+
+// 右侧结果预览面板
+interface FilePreview {
+  type: 'table' | 'json' | 'markdown' | 'html' | 'image' | 'code' | 'file'
+  format: string
+  fileName: string
+  fileSize: number
+  columns?: string[]
+  data?: string[][]
+  totalRows?: number
+  displayedRows?: number
+  content?: any
+  url?: string
+  downloadUrl?: string
+}
+const showPreviewPanel = ref(false)
+const previewLoading = ref(false)
+const previewError = ref('')
+const previewData = ref<FilePreview | null>(null)
+const currentPreviewFile = ref<OutputFile | null>(null)
 const slashQuery = ref('')
 const slashPopupPosition = ref({ x: 0, y: 0 })
 
@@ -3663,52 +3683,67 @@ const getFileTypeInfo = (type: OutputFile['type']) => {
   return typeMap[type] || typeMap.other
 }
 
-// 下载并打开输出文件
+// 打开输出文件预览面板
 const openOutputFile = async (file: OutputFile) => {
-  // 如果是 blob URL，直接下载
-  if (file.url.startsWith('blob:')) {
-    const link = document.createElement('a')
-    link.href = file.url
-    link.download = file.name
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    return
-  }
+  currentPreviewFile.value = file
+  showPreviewPanel.value = true
+  previewLoading.value = true
+  previewError.value = ''
+  previewData.value = null
 
-  // 构建完整URL（后端根地址，不含 /api）
+  try {
+    const response = await agentApi.preview(file.url, 100)
+    previewData.value = {
+      type: response.type,
+      format: response.format,
+      fileName: response.file_name,
+      fileSize: response.file_size,
+      columns: response.columns,
+      data: response.data,
+      totalRows: response.total_rows,
+      displayedRows: response.displayed_rows,
+      content: response.content,
+      url: response.url,
+      downloadUrl: response.download_url
+    }
+  } catch (error: any) {
+    previewError.value = error.message || '加载预览失败'
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+// 关闭预览面板
+const closePreviewPanel = () => {
+  showPreviewPanel.value = false
+  previewData.value = null
+  currentPreviewFile.value = null
+}
+
+// 下载当前预览的文件
+const downloadCurrentFile = async () => {
+  if (!currentPreviewFile.value) return
+
+  const file = currentPreviewFile.value
   const fullUrl = file.url.startsWith('http') ? file.url : `${config.serverBaseUrl}${file.url}`
 
   try {
-    // 下载文件
     const response = await fetch(fullUrl)
-    if (!response.ok) {
-      throw new Error('下载失败')
-    }
+    if (!response.ok) throw new Error('下载失败')
 
     const blob = await response.blob()
     const blobUrl = URL.createObjectURL(blob)
 
-    // 创建下载链接
     const link = document.createElement('a')
     link.href = blobUrl
     link.download = file.name
-
-    // 触发下载
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
 
-    // 同时在新窗口打开预览（对于可预览的文件类型）
-    if (['html', 'pdf', 'png', 'jpg', 'markdown'].includes(file.type)) {
-      window.open(blobUrl, '_blank')
-    }
-
-    // 延迟释放 URL
     setTimeout(() => URL.revokeObjectURL(blobUrl), 5000)
   } catch (error) {
     console.error('下载文件失败:', error)
-    // 降级：直接在新窗口打开
     window.open(fullUrl, '_blank')
   }
 }
@@ -4380,6 +4415,114 @@ const openOutputFile = async (file: OutputFile) => {
           </div>
         </div>
 
+      </div>
+
+      <!-- 右侧结果预览面板 -->
+      <div v-if="showPreviewPanel" class="preview-panel">
+        <div class="preview-header">
+          <div class="preview-title">
+            <span class="preview-icon">{{ currentPreviewFile ? getFileTypeInfo(currentPreviewFile.type).icon : '📄' }}</span>
+            <span class="preview-filename">{{ previewData?.fileName || currentPreviewFile?.name || '预览' }}</span>
+          </div>
+          <div class="preview-actions">
+            <button class="preview-action-btn" @click="downloadCurrentFile" title="下载">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+            </button>
+            <button v-if="currentPreviewFile" class="preview-action-btn" @click="saveToDataNotes(currentPreviewFile)" title="保存到便签">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/>
+                <polyline points="7 3 7 8 15 8"/>
+              </svg>
+            </button>
+            <button class="preview-close-btn" @click="closePreviewPanel" title="关闭">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"/>
+                <line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="preview-content">
+          <!-- 加载中 -->
+          <div v-if="previewLoading" class="preview-loading">
+            <div class="loading-spinner"></div>
+            <span>加载预览中...</span>
+          </div>
+
+          <!-- 错误 -->
+          <div v-else-if="previewError" class="preview-error">
+            <span class="error-icon">⚠️</span>
+            <span>{{ previewError }}</span>
+          </div>
+
+          <!-- 表格预览 -->
+          <div v-else-if="previewData?.type === 'table'" class="preview-table-container">
+            <div class="table-info">
+              <span>共 {{ previewData.totalRows }} 行</span>
+              <span v-if="previewData.totalRows! > previewData.displayedRows!">
+                （显示前 {{ previewData.displayedRows }} 行）
+              </span>
+            </div>
+            <div class="table-wrapper">
+              <table class="preview-table">
+                <thead>
+                  <tr>
+                    <th v-for="col in previewData.columns" :key="col">{{ col }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(row, idx) in previewData.data" :key="idx">
+                    <td v-for="(cell, cIdx) in row" :key="cIdx">{{ cell }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- JSON 预览 -->
+          <div v-else-if="previewData?.type === 'json'" class="preview-code-container">
+            <pre class="preview-code json">{{ JSON.stringify(previewData.content, null, 2) }}</pre>
+          </div>
+
+          <!-- Markdown 预览 -->
+          <div v-else-if="previewData?.type === 'markdown'" class="preview-markdown-container">
+            <div class="markdown-content" v-html="renderMarkdown(previewData.content)"></div>
+          </div>
+
+          <!-- HTML 预览 -->
+          <div v-else-if="previewData?.type === 'html'" class="preview-html-container">
+            <iframe :srcdoc="previewData.content" class="preview-iframe"></iframe>
+          </div>
+
+          <!-- 图片预览 -->
+          <div v-else-if="previewData?.type === 'image'" class="preview-image-container">
+            <img :src="config.serverBaseUrl + previewData.url" :alt="previewData.fileName" class="preview-image" />
+          </div>
+
+          <!-- 代码预览 -->
+          <div v-else-if="previewData?.type === 'code'" class="preview-code-container">
+            <pre class="preview-code" :class="previewData.format">{{ previewData.content }}</pre>
+          </div>
+
+          <!-- 其他文件 -->
+          <div v-else-if="previewData?.type === 'file'" class="preview-file-info">
+            <div class="file-info-icon">{{ currentPreviewFile ? getFileTypeInfo(currentPreviewFile.type).icon : '📄' }}</div>
+            <div class="file-info-name">{{ previewData.fileName }}</div>
+            <div class="file-info-size">{{ formatFileSize(previewData.fileSize) }}</div>
+            <button class="download-btn" @click="downloadCurrentFile">下载文件</button>
+          </div>
+        </div>
+
+        <div class="preview-footer" v-if="previewData">
+          <span class="file-size">{{ formatFileSize(previewData.fileSize) }}</span>
+          <span class="file-format">{{ previewData.format.toUpperCase() }}</span>
+        </div>
       </div>
 
     </div>
@@ -8245,5 +8388,496 @@ const openOutputFile = async (file: OutputFile) => {
 
 .panel-chat-area::-webkit-scrollbar-thumb:hover {
   background: rgba(139, 92, 246, 0.3);
+}
+
+/* ==================== 右侧结果预览面板 ==================== */
+.preview-panel {
+  width: 480px;
+  min-width: 320px;
+  max-width: 600px;
+  height: 100%;
+  background: #fff;
+  border-left: 1px solid #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.05);
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  border-bottom: 1px solid #e5e7eb;
+  flex-shrink: 0;
+}
+
+.preview-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.preview-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.preview-filename {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.preview-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.preview-action-btn:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+  color: #374151;
+}
+
+.preview-action-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.preview-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.preview-close-btn:hover {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #ef4444;
+}
+
+.preview-close-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.preview-content {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  background: #fafafa;
+}
+
+/* 加载状态 */
+.preview-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  gap: 12px;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.preview-loading .loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #e5e7eb;
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* 错误状态 */
+.preview-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  gap: 8px;
+  color: #ef4444;
+  font-size: 13px;
+  text-align: center;
+}
+
+.preview-error .error-icon {
+  font-size: 32px;
+}
+
+/* 表格预览 */
+.preview-table-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.table-info {
+  padding: 8px 12px;
+  background: #f1f5f9;
+  border-radius: 8px 8px 0 0;
+  font-size: 12px;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+  border-bottom: none;
+}
+
+.table-wrapper {
+  flex: 1;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 0 0 8px 8px;
+  background: #fff;
+}
+
+.preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.preview-table th {
+  position: sticky;
+  top: 0;
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 600;
+  color: #374151;
+  border-bottom: 2px solid #e2e8f0;
+  white-space: nowrap;
+}
+
+.preview-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid #f1f5f9;
+  color: #4b5563;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-table tbody tr:hover {
+  background: #f8fafc;
+}
+
+.preview-table tbody tr:nth-child(even) {
+  background: #fafafa;
+}
+
+.preview-table tbody tr:nth-child(even):hover {
+  background: #f1f5f9;
+}
+
+/* 代码预览 */
+.preview-code-container {
+  background: #1e1e1e;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.preview-code {
+  margin: 0;
+  padding: 16px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #d4d4d4;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.preview-code.json {
+  color: #ce9178;
+}
+
+.preview-code.python {
+  color: #9cdcfe;
+}
+
+.preview-code.javascript,
+.preview-code.js {
+  color: #dcdcaa;
+}
+
+/* Markdown 预览 */
+.preview-markdown-container {
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  padding: 20px;
+}
+
+.markdown-content {
+  font-size: 14px;
+  line-height: 1.7;
+  color: #374151;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3 {
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  color: #111827;
+  font-weight: 600;
+}
+
+.markdown-content h1 {
+  font-size: 1.5em;
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 0.3em;
+}
+
+.markdown-content h2 {
+  font-size: 1.3em;
+}
+
+.markdown-content h3 {
+  font-size: 1.1em;
+}
+
+.markdown-content p {
+  margin: 0.8em 0;
+}
+
+.markdown-content code {
+  background: #f3f4f6;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.9em;
+}
+
+.markdown-content pre {
+  background: #1e1e1e;
+  padding: 12px 16px;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.markdown-content pre code {
+  background: transparent;
+  padding: 0;
+  color: #d4d4d4;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  padding-left: 1.5em;
+  margin: 0.8em 0;
+}
+
+.markdown-content li {
+  margin: 0.3em 0;
+}
+
+.markdown-content blockquote {
+  border-left: 4px solid #6366f1;
+  padding-left: 1em;
+  margin: 1em 0;
+  color: #6b7280;
+  background: #f8fafc;
+  padding: 0.5em 1em;
+  border-radius: 0 8px 8px 0;
+}
+
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+}
+
+.markdown-content th,
+.markdown-content td {
+  border: 1px solid #e5e7eb;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.markdown-content th {
+  background: #f8fafc;
+  font-weight: 600;
+}
+
+/* HTML 预览 */
+.preview-html-container {
+  height: 100%;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  overflow: hidden;
+}
+
+.preview-iframe {
+  width: 100%;
+  height: 100%;
+  min-height: 400px;
+  border: none;
+}
+
+/* 图片预览 */
+.preview-image-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.preview-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+/* 文件信息预览 */
+.preview-file-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  gap: 12px;
+  text-align: center;
+}
+
+.file-info-icon {
+  font-size: 48px;
+}
+
+.file-info-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-info-size {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.download-btn {
+  margin-top: 8px;
+  padding: 8px 20px;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.download-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+}
+
+/* 预览面板底部 */
+.preview-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: #f8fafc;
+  border-top: 1px solid #e5e7eb;
+  font-size: 11px;
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+
+.preview-footer .file-size {
+  font-weight: 500;
+}
+
+.preview-footer .file-format {
+  background: #e5e7eb;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+/* 预览面板滚动条 */
+.preview-content::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.preview-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.preview-content::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+
+.preview-content::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+.table-wrapper::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.table-wrapper::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.table-wrapper::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+.table-wrapper::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }
 </style>
