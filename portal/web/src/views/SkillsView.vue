@@ -57,6 +57,54 @@ const modalMode = ref<'create' | 'upload'>('create')
 const pendingSkillName = ref<string | null>(null)
 const agentChatRef = ref<InstanceType<typeof AgentChat> | null>(null)
 const workflowBuilderRef = ref<InstanceType<typeof WorkflowBuilder> | null>(null)
+const gridWrapperRef = ref<HTMLElement | null>(null)
+
+// 获取滚动单位
+const getScrollUnit = () => {
+  const wrapper = gridWrapperRef.value
+  if (!wrapper) return { rowHeight: 0, gap: 8 }
+  const firstCell = wrapper.querySelector('.grid-cell') as HTMLElement
+  if (!firstCell) return { rowHeight: 120, gap: 8 }
+  return { rowHeight: firstCell.offsetHeight, gap: 8 }
+}
+
+// 单击：向下滚动一行
+const scrollDownOne = () => {
+  totalSlots.value += COLS
+  nextTick(() => {
+    const wrapper = gridWrapperRef.value
+    if (!wrapper) return
+    const { rowHeight, gap } = getScrollUnit()
+    wrapper.scrollBy({ top: rowHeight + gap, behavior: 'smooth' })
+  })
+}
+
+// 双击：向下滚动一屏（4行）
+const scrollDownPage = () => {
+  totalSlots.value += COLS * 4
+  nextTick(() => {
+    const wrapper = gridWrapperRef.value
+    if (!wrapper) return
+    const { rowHeight, gap } = getScrollUnit()
+    wrapper.scrollBy({ top: (rowHeight + gap) * 4, behavior: 'smooth' })
+  })
+}
+
+// 单击：向上滚动一行
+const scrollUpOne = () => {
+  const wrapper = gridWrapperRef.value
+  if (!wrapper) return
+  const { rowHeight, gap } = getScrollUnit()
+  wrapper.scrollBy({ top: -(rowHeight + gap), behavior: 'smooth' })
+}
+
+// 双击：向上滚动一屏（4行）
+const scrollUpPage = () => {
+  const wrapper = gridWrapperRef.value
+  if (!wrapper) return
+  const { rowHeight, gap } = getScrollUnit()
+  wrapper.scrollBy({ top: -(rowHeight + gap) * 4, behavior: 'smooth' })
+}
 
 // 监听标签切换，关闭浮动元素
 watch(activeTab, () => {
@@ -72,7 +120,8 @@ const workflowFileInputRef = ref<HTMLInputElement | null>(null)
 const isWorkflowDragging = ref(false)
 
 // 总格子数（5列x4行=20个）
-const TOTAL_SLOTS = 20
+const COLS = 5
+const totalSlots = ref(20)  // 可动态增加
 
 // Loading state
 const isLoadingSkills = ref(false)
@@ -586,17 +635,17 @@ const handleSaveWorkflowFromAgent = async (workflowData: { name: string; descrip
 const displayList = computed(() => {
   const list: (any | null)[] = [...skills.value]
   // 补齐空位到总数
-  while (list.length < TOTAL_SLOTS) {
+  while (list.length < totalSlots.value) {
     list.push(null)
   }
   return list
 })
 
 // 空位数量
-const emptyCount = computed(() => TOTAL_SLOTS - skills.value.length)
+const emptyCount = computed(() => totalSlots.value - skills.value.length)
 
 // 是否已满
-const isFull = computed(() => skills.value.length >= TOTAL_SLOTS)
+const isFull = computed(() => skills.value.length >= totalSlots.value)
 
 const openCreateModal = () => {
   modalMode.value = 'create'
@@ -1187,13 +1236,10 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
-          <!-- 满容量提示 -->
-          <div v-if="isFull" class="full-notice">
-            <span class="full-notice-icon">🎉</span>
-            <span class="full-notice-text">All slots filled!</span>
-          </div>
-          <!-- 卡片网格 -->
-          <div class="grid">
+          <!-- Grid 滚动容器 -->
+          <div class="grid-wrapper" ref="gridWrapperRef">
+            <!-- 卡片网格 -->
+            <div class="grid">
             <template v-for="(item, index) in displayList" :key="index">
               <!-- 有内容的卡片 -->
               <div v-if="item" class="grid-cell">
@@ -1237,7 +1283,26 @@ onUnmounted(() => {
                 </div>
               </div>
             </template>
+            </div>
           </div>
+          <!-- 向上滚动按钮 -->
+          <button class="scroll-btn scroll-up-btn" @click="scrollUpOne" @dblclick="scrollUpPage">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M5 15l7-7 7 7"/>
+            </svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M5 15l7-7 7 7"/>
+            </svg>
+          </button>
+          <!-- 向下滚动按钮 -->
+          <button class="scroll-btn scroll-down-btn" @click="scrollDownOne" @dblclick="scrollDownPage">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M19 9l-7 7-7-7"/>
+            </svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M19 9l-7 7-7-7"/>
+            </svg>
+          </button>
         </div>
         <div v-show="activeTab === 'agent'" class="agent-area">
           <AgentChat
@@ -1865,7 +1930,11 @@ onUnmounted(() => {
   gap: 8px;
   height: 100%;
   min-width: 0;
-  overflow: visible;
+  overflow: hidden;
+  position: relative;
+  /* 每行高度：基于视口计算，一屏正好4行 */
+  /* 100vh - 顶部区域(120px) - 外边距(16px) - 4个gap(32px) 再除以4 */
+  --row-height: calc((100vh - 168px) / 4);
 }
 
 /* 顶部预留区域 - 2倍高度 */
@@ -1973,40 +2042,122 @@ onUnmounted(() => {
   background: rgba(255,255,255,0.25);
 }
 
-/* Full Notice */
-.full-notice {
+/* 滚动按钮通用样式 */
+.scroll-btn {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 50px;
+  height: 36px;
+  border-radius: 18px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 8px 16px;
-  background: linear-gradient(90deg, #fef3c7 0%, #fde68a 100%);
-  border-radius: 6px;
-  margin-bottom: 4px;
+  gap: 0;
+  z-index: 10;
+  transition: all 0.2s ease;
 }
 
-.full-notice-icon {
-  font-size: 14px;
+.scroll-btn:hover {
+  transform: translateX(-50%) scale(1.1);
 }
 
-.full-notice-text {
-  font-size: 11px;
-  color: #92400e;
+.scroll-btn svg {
+  width: 24px;
+  height: 14px;
+  stroke: #667eea;
+  transition: all 0.3s ease;
 }
 
-.full-notice-text strong {
-  color: #78350f;
+/* 第一个箭头更透明 */
+.scroll-btn svg:first-child {
+  opacity: 0.3;
+  margin-bottom: -8px;
+}
+
+/* 第二个箭头更实 */
+.scroll-btn svg:last-child {
+  opacity: 0.7;
+}
+
+.scroll-btn:hover svg:first-child {
+  opacity: 0.5;
+}
+
+.scroll-btn:hover svg:last-child {
+  opacity: 1;
+}
+
+/* 向上按钮 */
+.scroll-up-btn {
+  top: 130px;
+}
+
+.scroll-up-btn svg:first-child {
+  margin-bottom: 0;
+  margin-top: -8px;
+  order: 2;
+}
+
+.scroll-up-btn svg:last-child {
+  order: 1;
+}
+
+.scroll-up-btn svg {
+  animation: bounceUp 1.5s ease-in-out infinite;
+}
+
+.scroll-up-btn svg:first-child {
+  animation-delay: 0.15s;
+}
+
+/* 向下按钮 */
+.scroll-down-btn {
+  bottom: 16px;
+}
+
+.scroll-down-btn svg {
+  animation: bounceDown 1.5s ease-in-out infinite;
+}
+
+.scroll-down-btn svg:last-child {
+  animation-delay: 0.15s;
+}
+
+@keyframes bounceDown {
+  0%, 100% { transform: translateY(0); opacity: inherit; }
+  50% { transform: translateY(2px); opacity: 1; }
+}
+
+@keyframes bounceUp {
+  0%, 100% { transform: translateY(0); opacity: inherit; }
+  50% { transform: translateY(-2px); opacity: 1; }
+}
+
+/* Grid 滚动容器 */
+.grid-wrapper {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* 隐藏滚动条 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.grid-wrapper::-webkit-scrollbar {
+  display: none;
 }
 
 /* Grid */
 .grid {
-  flex: 1;
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  grid-template-rows: repeat(4, 1fr);
+  grid-auto-rows: var(--row-height);
   gap: 8px;
-  min-height: 0;
-  overflow: visible;
 }
 
 .grid-cell {
@@ -2678,19 +2829,19 @@ onUnmounted(() => {
 
 /* 响应式 */
 @media (max-width: 1400px) {
-  .grid { grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(5, 1fr); }
+  .grid { grid-template-columns: repeat(4, 1fr); }
 }
 
 @media (max-width: 1100px) {
-  .grid { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(4, 1fr); }
+  .grid { grid-template-columns: repeat(3, 1fr); }
 }
 
 @media (max-width: 800px) {
-  .grid { grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(4, 1fr); }
+  .grid { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (max-width: 500px) {
-  .grid { grid-template-columns: 1fr; grid-template-rows: repeat(4, 1fr); }
+  .grid { grid-template-columns: 1fr; }
   .sidebar { width: 56px; margin: 4px 0 4px 4px; padding: 8px 4px; }
   .sidebar-logo { padding-top: 4px; }
   .logo-icon { width: 32px; height: 32px; }
