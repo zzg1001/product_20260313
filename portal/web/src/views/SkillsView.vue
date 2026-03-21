@@ -59,6 +59,16 @@ const agentChatRef = ref<InstanceType<typeof AgentChat> | null>(null)
 const workflowBuilderRef = ref<InstanceType<typeof WorkflowBuilder> | null>(null)
 const gridWrapperRef = ref<HTMLElement | null>(null)
 
+// 是否可以向上滚动
+const canScrollUp = ref(false)
+
+// 检查滚动状态
+const checkScrollPosition = () => {
+  const wrapper = gridWrapperRef.value
+  if (!wrapper) return
+  canScrollUp.value = wrapper.scrollTop > 10
+}
+
 // 获取滚动单位
 const getScrollUnit = () => {
   const wrapper = gridWrapperRef.value
@@ -1237,7 +1247,7 @@ onUnmounted(() => {
             </div>
           </div>
           <!-- Grid 滚动容器 -->
-          <div class="grid-wrapper" ref="gridWrapperRef">
+          <div class="grid-wrapper" ref="gridWrapperRef" @scroll="checkScrollPosition">
             <!-- 卡片网格 -->
             <div class="grid">
             <template v-for="(item, index) in displayList" :key="index">
@@ -1286,7 +1296,7 @@ onUnmounted(() => {
             </div>
           </div>
           <!-- 向上滚动按钮 -->
-          <button class="scroll-btn scroll-up-btn" @click="scrollUpOne" @dblclick="scrollUpPage">
+          <button v-show="canScrollUp" class="scroll-btn scroll-up-btn" @click="scrollUpOne" @dblclick="scrollUpPage">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <path d="M5 15l7-7 7 7"/>
             </svg>
@@ -2047,11 +2057,11 @@ onUnmounted(() => {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  width: 50px;
-  height: 36px;
-  border-radius: 18px;
+  width: 70px;
+  height: 50px;
+  border-radius: 25px;
   border: none;
-  background: transparent;
+  background: radial-gradient(circle, rgba(102, 126, 234, 0.35) 0%, rgba(102, 126, 234, 0.15) 50%, transparent 75%);
   cursor: pointer;
   display: flex;
   flex-direction: column;
@@ -2064,28 +2074,29 @@ onUnmounted(() => {
 
 .scroll-btn:hover {
   transform: translateX(-50%) scale(1.1);
+  background: radial-gradient(circle, rgba(102, 126, 234, 0.5) 0%, rgba(102, 126, 234, 0.2) 50%, transparent 75%);
 }
 
 .scroll-btn svg {
-  width: 24px;
-  height: 14px;
+  width: 28px;
+  height: 16px;
   stroke: #667eea;
   transition: all 0.3s ease;
 }
 
 /* 第一个箭头更透明 */
 .scroll-btn svg:first-child {
-  opacity: 0.3;
-  margin-bottom: -8px;
+  opacity: 0.35;
+  margin-bottom: -6px;
 }
 
 /* 第二个箭头更实 */
 .scroll-btn svg:last-child {
-  opacity: 0.7;
+  opacity: 0.8;
 }
 
 .scroll-btn:hover svg:first-child {
-  opacity: 0.5;
+  opacity: 0.6;
 }
 
 .scroll-btn:hover svg:last-child {
