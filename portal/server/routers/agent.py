@@ -439,34 +439,18 @@ async def preview_file(file_path: str, max_rows: int = 100):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"解析 CSV 失败: {str(e)}")
 
-    # JSON 文件
+    # JSON 文件 - 始终以 JSON 格式展示
     elif suffix == '.json':
         try:
             content = full_path.read_text(encoding='utf-8')
             data = json.loads(content)
-            # 如果是数组，尝试转换为表格
-            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
-                df = pd.DataFrame(data)
-                total_rows = len(df)
-                df = df.head(max_rows)
-                return {
-                    "type": "table",
-                    "format": "json_array",
-                    "columns": df.columns.tolist(),
-                    "data": df.fillna("").astype(str).values.tolist(),
-                    "total_rows": total_rows,
-                    "displayed_rows": len(df),
-                    "file_name": full_path.name,
-                    "file_size": file_size
-                }
-            else:
-                return {
-                    "type": "json",
-                    "format": "json",
-                    "content": data,
-                    "file_name": full_path.name,
-                    "file_size": file_size
-                }
+            return {
+                "type": "json",
+                "format": "json",
+                "content": data,
+                "file_name": full_path.name,
+                "file_size": file_size
+            }
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"解析 JSON 失败: {str(e)}")
 

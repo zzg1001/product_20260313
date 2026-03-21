@@ -1,6 +1,6 @@
 {
-  "name": "帮我创建一个-excel-json",
-  "description": "帮我创建一个 Excel 转 JSON 的技能 用默认",
+  "name": "excel-to-json",
+  "description": "将 Excel 文件(.xlsx/.xls)转换为 JSON 格式。输入：Excel文件，输出：JSON数据",
   "icon": "⚡",
   "tags": [
     "自动创建"

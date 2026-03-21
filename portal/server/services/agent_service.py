@@ -17,6 +17,8 @@ settings = get_settings()
 
 # 技能文件夹存储目录
 SKILLS_STORAGE_DIR = Path(__file__).parent.parent / "skills_storage"
+# 上传文件目录
+UPLOADS_DIR = Path(__file__).parent.parent / "uploads"
 
 
 class AgentService:
@@ -162,6 +164,7 @@ class AgentService:
 - `action`: 这一步要做什么
 - `exists`: 检查 Available skills 列表判断技能是否存在
 
+
 ## 示例
 用户: "帮我分析销售数据并生成报告"
 
@@ -290,6 +293,36 @@ If no suitable skills are found, return an empty plan with an explanation."""
 
         return content_parts if content_parts else text
 
+    def _detect_skill_output_format(self, skill_name: str, skill_description: str, skill_md_content: str) -> str:
+        """
+        检测技能的输出格式
+
+        规则很简单：
+        1. 如果 SKILL.md frontmatter 中有 output_format 字段，用它
+        2. 如果 SKILL.md 中有 <!--OUTPUT_FORMAT:xxx--> 声明，用它
+        3. 否则默认 md
+        """
+        import re
+        import yaml
+
+        # 1. 尝试解析 frontmatter 中的 output_format
+        frontmatter_match = re.match(r'^---\s*\n(.*?)\n---', skill_md_content, re.DOTALL)
+        if frontmatter_match:
+            try:
+                frontmatter = yaml.safe_load(frontmatter_match.group(1))
+                if frontmatter and 'output_format' in frontmatter:
+                    return frontmatter['output_format'].lower()
+            except:
+                pass
+
+        # 2. 检查内容中是否有格式声明
+        format_match = re.search(r'<!--OUTPUT_FORMAT:(\w+)-->', skill_md_content, re.IGNORECASE)
+        if format_match:
+            return format_match.group(1).lower()
+
+        # 3. 默认 md
+        return "md"
+
     def _parse_output_format(self, ai_output: str) -> tuple[Optional[str], str]:
         """
         解析 AI 输出中的格式声明标记
@@ -313,32 +346,9 @@ If no suitable skills are found, return an empty plan with an explanation."""
             clean_content = re.sub(pattern, '', ai_output.strip(), count=1, flags=re.IGNORECASE)
             return output_format, clean_content.strip()
 
-        # 如果没有显式声明，尝试智能检测
-        content_lower = ai_output.strip().lower()
-
-        # SVG 检测
-        if content_lower.startswith("<svg") or content_lower.startswith("<?xml") and "<svg" in content_lower:
-            return "svg", ai_output
-
-        # HTML 检测
-        if content_lower.startswith(("<!doctype", "<html")):
-            return "html", ai_output
-
-        # Markdown 检测（以 # 开头的标题）
-        if ai_output.strip().startswith("#"):
-            return "md", ai_output
-
-        # JSON 检测
-        if (content_lower.startswith("{") and content_lower.endswith("}")) or \
-           (content_lower.startswith("[") and content_lower.endswith("]")):
-            try:
-                json.loads(ai_output.strip())
-                return "json", ai_output
-            except json.JSONDecodeError:
-                pass
-
-        # 默认返回无格式
-        return None, ai_output
+        # 不做智能检测，默认就是 md
+        # 只有明确声明 <!--OUTPUT_FORMAT:xxx--> 才用其他格式
+        return "md", ai_output
 
     def _execute_image_code(self, code: str, skill_name: str) -> Optional[dict]:
         """
@@ -415,8 +425,15 @@ print(r'{output_path}')
             print("[Img Process] No input images provided")
             return None
 
-        # 取第一个图片作为输入
-        input_path = input_paths[0]
+        # 取第一个图片作为输入，转换 URL 路径
+        raw_path = input_paths[0]
+        if raw_path.startswith("/uploads/"):
+            input_path = str(UPLOADS_DIR / raw_path[len("/uploads/"):])
+        elif raw_path.startswith("/outputs/"):
+            input_path = str(OUTPUTS_DIR / raw_path[len("/outputs/"):])
+        else:
+            input_path = raw_path
+
         if not Path(input_path).exists():
             print(f"[Img Process] Input file not found: {input_path}")
             return None
@@ -523,8 +540,18 @@ OUTPUT_PATH = r'{output_path}'
                         'error': f'代码包含不允许的操作: {pattern}'
                     }
 
+            # 转换 URL 路径为文件系统路径
+            resolved_paths = []
+            for fp in file_paths:
+                if fp.startswith("/uploads/"):
+                    resolved_paths.append(str(UPLOADS_DIR / fp[len("/uploads/"):]))
+                elif fp.startswith("/outputs/"):
+                    resolved_paths.append(str(OUTPUTS_DIR / fp[len("/outputs/"):]))
+                else:
+                    resolved_paths.append(fp)
+
             # 构建文件路径列表字符串
-            file_paths_str = repr(file_paths)
+            file_paths_str = repr(resolved_paths)
 
             # 创建临时脚本
             with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
@@ -749,10 +776,40 @@ def save_data(data, name=None, format='csv'):
         sys.stdout = StringIO()
         sys.stderr = StringIO()
 
+        # 转换 params 中的 URL 路径为文件系统路径
+        resolved_params = dict(params) if params else {}
+
+        def resolve_path(p):
+            """转换单个 URL 路径"""
+            if isinstance(p, str):
+                if p.startswith("/uploads/"):
+                    return str(UPLOADS_DIR / p[len("/uploads/"):])
+                elif p.startswith("/outputs/"):
+                    return str(OUTPUTS_DIR / p[len("/outputs/"):])
+            return p
+
+        for key in ['file_path', 'file_paths', 'files']:
+            if key in resolved_params:
+                val = resolved_params[key]
+                if isinstance(val, str):
+                    resolved_params[key] = resolve_path(val)
+                elif isinstance(val, list):
+                    resolved_params[key] = [resolve_path(p) for p in val]
+
+        # 兼容性：如果有 file_paths 但没有 files，复制一份
+        if 'file_paths' in resolved_params and 'files' not in resolved_params:
+            resolved_params['files'] = resolved_params['file_paths']
+        # 兼容性：如果有 file_path 但没有 file_paths/files，创建列表
+        if 'file_path' in resolved_params and resolved_params['file_path']:
+            if 'file_paths' not in resolved_params:
+                resolved_params['file_paths'] = [resolved_params['file_path']]
+            if 'files' not in resolved_params:
+                resolved_params['files'] = [resolved_params['file_path']]
+
         try:
             # Create execution context with params and utilities
             exec_globals = {
-                "params": params or {},
+                "params": resolved_params,
                 # Skill folder path
                 "SKILL_DIR": skill_folder,
                 # Simulate __file__ for scripts that use it
@@ -778,10 +835,11 @@ def save_data(data, name=None, format='csv'):
 
                 # 调用 main(params) 函数
                 if "main" in exec_globals and callable(exec_globals["main"]):
-                    print(f"\n[AgentService] Calling main() with params:")
-                    print(f"[AgentService] file_path: {(params or {}).get('file_path', 'NOT SET')}")
-                    print(f"[AgentService] file_paths: {(params or {}).get('file_paths', 'NOT SET')}")
-                    result = exec_globals["main"](params or {})
+                    print(f"\n[AgentService] Calling main() with resolved_params:")
+                    print(f"[AgentService] file_path: {resolved_params.get('file_path', 'NOT SET')}")
+                    print(f"[AgentService] file_paths: {resolved_params.get('file_paths', 'NOT SET')}")
+                    print(f"[AgentService] files: {resolved_params.get('files', 'NOT SET')}")
+                    result = exec_globals["main"](resolved_params)
                     exec_globals["result"] = result
 
             finally:
@@ -913,75 +971,10 @@ def save_data(data, name=None, format='csv'):
             if file_paths:
                 file_content = self._read_files_for_ai(file_paths)
 
-            # 构建 prompt - 让 AI 自己决定输出格式
-            system_prompt = f"""你是一个专业的 AI 助手，正在执行名为「{skill.name}」的技能。
-
-## 技能说明
-{skill_md_content[:8000]}
+            # 简化 system prompt - 像 Claude Code 一样，直接用 SKILL.md，不加格式干扰
+            system_prompt = f"""{skill_md_content[:12000]}
 
 {reference_content[:4000] if reference_content else ""}
-
-## 任务要求
-根据技能说明和用户需求，生成高质量的输出。
-
-## 输出格式规范（重要！）
-你必须在输出的第一行添加格式声明标记，格式为：
-<!--OUTPUT_FORMAT:文件扩展名-->
-
-### 文本类格式
-- md: Markdown 文档、报告、分析结果
-- html: 网页、可视化页面、交互式图表
-- json: 结构化数据、API 响应
-- csv: 表格数据
-- txt: 纯文本
-- py/js/ts/java 等: 代码文件
-
-### 图片/图表格式
-- svg: 矢量图（流程图、架构图、简单图表）- 直接输出 SVG 代码
-- png_code: 数据可视化图表，输出 matplotlib Python 代码，系统会自动执行生成图片
-- img_code: 图片处理/增强，输出 PIL/Pillow Python 代码，系统会自动执行处理图片
-- analysis_code: 数据分析代码，支持 pandas/numpy/matplotlib/seaborn，系统会执行并返回结果
-- html: 交互式图表推荐使用 HTML + Chart.js/ECharts
-
-### 示例
-
-文档输出：
-<!--OUTPUT_FORMAT:md-->
-# 报告标题
-...内容...
-
-SVG 图表：
-<!--OUTPUT_FORMAT:svg-->
-<svg viewBox="0 0 400 300">...</svg>
-
-matplotlib 图表：
-<!--OUTPUT_FORMAT:png_code-->
-import matplotlib.pyplot as plt
-plt.plot([1,2,3], [4,5,6])
-plt.title('示例图表')
-
-图片处理（增强、滤镜、调整等）：
-<!--OUTPUT_FORMAT:img_code-->
-from PIL import Image, ImageEnhance, ImageFilter
-# INPUT_PATH 和 OUTPUT_PATH 由系统自动注入
-img = Image.open(INPUT_PATH)
-# 锐化
-enhancer = ImageEnhance.Sharpness(img)
-img = enhancer.enhance(1.5)
-# 对比度
-enhancer = ImageEnhance.Contrast(img)
-img = enhancer.enhance(1.2)
-img.save(OUTPUT_PATH)
-
-数据分析（推荐用于数据理解任务）：
-<!--OUTPUT_FORMAT:analysis_code-->
-# FILE_PATHS 由系统自动注入，包含所有输入文件
-df = pd.read_excel(FILE_PATHS[0])
-print(df.describe())
-print(df.info())
-# 可以使用 save_figure() 保存图表，save_data(df) 保存数据
-
-请根据任务性质选择最合适的输出格式，然后输出内容。不要输出额外的解释。
 """
 
             # 构建用户消息，包含文件内容（支持多模态）
@@ -1010,8 +1003,8 @@ print(df.info())
                 "content": clean_content
             }
 
-            # 根据 AI 声明的格式生成文件
-            if output_format == "html" or clean_content.strip().lower().startswith(("<!doctype", "<html")):
+            # 根据格式生成文件（只看 output_format，不再检测内容）
+            if output_format == "html":
                 result["_html"] = clean_content
             elif output_format == "png_code":
                 # 执行 matplotlib 代码生成图片
@@ -1141,69 +1134,12 @@ print(df.info())
             if file_paths:
                 file_content = self._read_files_for_ai(file_paths)
 
-            # 构建 prompt - 让 AI 自己决定输出格式
+            # 简化 system prompt - 不加格式干扰
             system_prompt = f"""你是一个专业的 AI 助手，正在执行名为「{skill.name}」的任务。
 
-## 技能说明
 {skill.description or '根据技能名称推断任务内容'}
 
-## 任务要求
-根据用户需求，生成高质量的输出。
-
-## 输出格式规范（重要！）
-你必须在输出的第一行添加格式声明标记，格式为：
-<!--OUTPUT_FORMAT:文件扩展名-->
-
-### 文本类格式
-- md: Markdown 文档、报告、分析结果
-- html: 网页、可视化页面、交互式图表
-- json: 结构化数据、API 响应
-- csv: 表格数据
-- txt: 纯文本
-- py/js/ts/java 等: 代码文件
-
-### 图片/图表格式
-- svg: 矢量图（流程图、架构图、简单图表）- 直接输出 SVG 代码
-- png_code: 数据可视化图表，输出 matplotlib Python 代码，系统会自动执行生成图片
-- img_code: 图片处理/增强，输出 PIL/Pillow Python 代码，系统会自动执行处理图片
-- analysis_code: 数据分析代码，支持 pandas/numpy/matplotlib/seaborn，系统会执行并返回结果
-- html: 交互式图表推荐使用 HTML + Chart.js/ECharts
-
-### 示例
-
-文档输出：
-<!--OUTPUT_FORMAT:md-->
-# 报告标题
-...内容...
-
-SVG 图表：
-<!--OUTPUT_FORMAT:svg-->
-<svg viewBox="0 0 400 300">...</svg>
-
-matplotlib 图表：
-<!--OUTPUT_FORMAT:png_code-->
-import matplotlib.pyplot as plt
-plt.plot([1,2,3], [4,5,6])
-plt.title('示例图表')
-
-图片处理（增强、滤镜、调整等）：
-<!--OUTPUT_FORMAT:img_code-->
-from PIL import Image, ImageEnhance, ImageFilter
-# INPUT_PATH 和 OUTPUT_PATH 由系统自动注入
-img = Image.open(INPUT_PATH)
-enhancer = ImageEnhance.Sharpness(img)
-img = enhancer.enhance(1.5)
-img.save(OUTPUT_PATH)
-
-数据分析（推荐用于数据理解任务）：
-<!--OUTPUT_FORMAT:analysis_code-->
-# FILE_PATHS 由系统自动注入，包含所有输入文件
-df = pd.read_excel(FILE_PATHS[0])
-print(df.describe())
-print(df.info())
-# 可以使用 save_figure() 保存图表，save_data(df) 保存数据
-
-请根据任务性质选择最合适的输出格式，然后输出内容。不要输出额外的解释。
+请根据任务要求生成输出。
 """
 
             # 构建用户消息，包含文件内容（支持多模态）
@@ -1232,8 +1168,8 @@ print(df.info())
                 "content": clean_content
             }
 
-            # 根据 AI 声明的格式生成文件
-            if output_format == "html" or clean_content.strip().lower().startswith(("<!doctype", "<html")):
+            # 根据格式生成文件（只看 output_format，不再检测内容）
+            if output_format == "html":
                 result["_html"] = clean_content
             elif output_format == "png_code":
                 # 执行 matplotlib 代码生成图片
@@ -1373,6 +1309,19 @@ print(df.info())
         wrapper = f'''
 
 # ========== 自动生成的 API 包装 ==========
+# 路径常量
+_UPLOADS_DIR = r'{UPLOADS_DIR}'
+_OUTPUTS_DIR = r'{OUTPUTS_DIR}'
+
+def _resolve_path(url_path):
+    """转换 URL 路径为文件系统路径"""
+    import os
+    if url_path.startswith("/uploads/"):
+        return os.path.join(_UPLOADS_DIR, url_path[len("/uploads/"):])
+    elif url_path.startswith("/outputs/"):
+        return os.path.join(_OUTPUTS_DIR, url_path[len("/outputs/"):])
+    return url_path
+
 def main(params):
     import json
     # 兼容两种字段名：file_paths (前端传递) 和 files (旧格式)
@@ -1383,9 +1332,9 @@ def main(params):
     print(f"[AutoWrapper] file_paths: {{file_paths}}, file_path: {{file_path}}")
 
     if file_paths:
-        input_file = file_paths[0]
+        input_file = _resolve_path(file_paths[0])
     elif file_path:
-        input_file = file_path
+        input_file = _resolve_path(file_path)
     else:
         return {{'status': 'error', 'message': '请上传文件'}}
 
@@ -1456,7 +1405,16 @@ def main(params):
                 contents.append(f"\n[已达到总字符限制，跳过剩余 {len(file_paths) - len(contents)} 个文件]")
                 break
             try:
-                path = Path(file_path)
+                # URL 路径转换为文件系统路径
+                if file_path.startswith("/uploads/"):
+                    filename = file_path[len("/uploads/"):]
+                    path = UPLOADS_DIR / filename
+                elif file_path.startswith("/outputs/"):
+                    filename = file_path[len("/outputs/"):]
+                    path = OUTPUTS_DIR / filename
+                else:
+                    path = Path(file_path)
+
                 if not path.exists():
                     continue
 

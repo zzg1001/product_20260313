@@ -182,6 +182,49 @@ const previewLoading = ref(false)
 const previewError = ref('')
 const previewData = ref<FilePreview | null>(null)
 const currentPreviewFile = ref<OutputFile | null>(null)
+const previewPanelRef = ref<HTMLElement | null>(null)
+
+// 浮动按钮拖动
+const floatingActionsPos = ref({ x: -100, y: 8 })
+const isDraggingFloating = ref(false)
+const dragStartPos = ref({ x: 0, y: 0 })
+
+const startDragFloating = (e: MouseEvent) => {
+  isDraggingFloating.value = true
+  dragStartPos.value = {
+    x: e.clientX - floatingActionsPos.value.x,
+    y: e.clientY - floatingActionsPos.value.y
+  }
+  document.addEventListener('mousemove', onDragFloating)
+  document.addEventListener('mouseup', stopDragFloating)
+}
+
+const onDragFloating = (e: MouseEvent) => {
+  if (!isDraggingFloating.value) return
+  floatingActionsPos.value = {
+    x: e.clientX - dragStartPos.value.x,
+    y: e.clientY - dragStartPos.value.y
+  }
+}
+
+const stopDragFloating = () => {
+  isDraggingFloating.value = false
+  document.removeEventListener('mousemove', onDragFloating)
+  document.removeEventListener('mouseup', stopDragFloating)
+}
+
+// 点击外部关闭预览面板
+const handleClickOutside = (e: MouseEvent) => {
+  if (!showPreviewPanel.value) return
+  const target = e.target as HTMLElement
+  // 检查是否点击在预览面板或悬浮工具栏内
+  if (previewPanelRef.value?.contains(target)) return
+  // 检查是否点击了打开预览的按钮
+  if (target.closest('.output-file-btn') || target.closest('.step-output-file')) return
+  // 关闭预览面板
+  showPreviewPanel.value = false
+}
+
 const slashQuery = ref('')
 const slashPopupPosition = ref({ x: 0, y: 0 })
 
@@ -194,23 +237,51 @@ const loadDataNotesForSlash = async () => {
   }
 }
 
-// 保存文件到便签
+// 保存/取消保存文件到便签
 const saveToDataNotes = async (outputFile: OutputFile, skillName?: string) => {
   try {
-    await dataNotesApi.create({
+    // 如果已保存，则取消保存
+    const existingNoteId = savedFiles.value.get(outputFile.url)
+    if (existingNoteId) {
+      await dataNotesApi.delete(existingNoteId)
+      savedFiles.value.delete(outputFile.url)
+      loadDataNotesForSlash()
+      return
+    }
+
+    // 保存新文件
+    let fileUrl = outputFile.url
+    let fileSize = outputFile.size
+
+    // 如果是 Blob URL，需要先上传到服务器
+    if (outputFile.url.startsWith('blob:')) {
+      const response = await fetch(outputFile.url)
+      const blob = await response.blob()
+      const file = new File([blob], outputFile.name, { type: blob.type || 'text/plain' })
+      const uploadResult = await agentApi.upload(file)
+      fileUrl = uploadResult.url
+      fileSize = String(uploadResult.size)
+    }
+
+    const note = await dataNotesApi.create({
       name: outputFile.name,
       description: `由技能 ${skillName || '未知'} 生成`,
       file_type: outputFile.type,
-      file_url: outputFile.url,
-      file_size: outputFile.size,
+      file_url: fileUrl,
+      file_size: fileSize,
       source_skill: skillName
     })
+    // 标记为已保存，记录 noteId
+    savedFiles.value.set(outputFile.url, note.id)
     // 刷新便签列表供"/"补全使用
     loadDataNotesForSlash()
   } catch (e) {
-    console.error('Failed to save to data notes:', e)
+    console.error('Failed to save/unsave data note:', e)
   }
 }
+
+// 检查文件是否已保存
+const isFileSaved = (url: string) => savedFiles.value.has(url)
 
 // 检测 "/" 命令输入
 const handleInputKeydown = (e: KeyboardEvent) => {
@@ -503,6 +574,7 @@ const pendingSaveEdges = ref<PipelineEdge[] | null>(null)
 // 多流程管理
 const collapsedGroups = ref<Set<string>>(new Set())  // 已折叠的流程组（默认展开）
 const savedGroups = ref<Set<string>>(new Set())  // 已保存的流程组
+const savedFiles = ref<Map<string, string>>(new Map())  // 已保存到便签的文件URL -> noteId
 const activeGroupId = ref<string | null>(null)  // 当前选中的流程组
 const showDeleteConfirm = ref(false)
 const pendingDeleteGroupId = ref<string | null>(null)
@@ -763,6 +835,11 @@ const handleDataNotesChange = () => {
 onMounted(() => {
   loadDataNotesForSlash()
   window.addEventListener('data-notes-changed', handleDataNotesChange)
+  document.addEventListener('click', handleClickOutside)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleClickOutside)
 })
 
 // 监听输入框变化检测 "/" 命令
@@ -1503,8 +1580,10 @@ const handleSkillComplete = async (result: { success: boolean; output?: string; 
                   url: response.output_file.url,
                   size: response.output_file.size
                 }
+                openOutputFile(step.outputFile)
               } else {
                 step.outputFile = generateOutputFile(step.skillName, step.description, step.output)
+                if (step.outputFile) openOutputFile(step.outputFile)
               }
             } else {
               step.status = 'error'
@@ -2792,10 +2871,14 @@ const executeSkillsParallel = async (messageId: number) => {
               }
               step.outputFile = outputFile
               console.log(`[Skill Parallel] step.outputFile after assignment:`, step.outputFile)
+              // 自动展示预览
+              openOutputFile(outputFile)
             } else {
               // 后端没有返回文件时，基于输出内容创建本地文件
               console.log(`[Skill Parallel] No output_file in response, generating local md`)
               step.outputFile = generateOutputFile(step.skillName, step.description, step.output)
+              // 自动展示预览
+              if (step.outputFile) openOutputFile(step.outputFile)
             }
             console.log(`[Skill Parallel] Step ${step.id} final state: status=${step.status}, hasOutputFile=${!!step.outputFile}`)
           } else {
@@ -3531,6 +3614,23 @@ const sendMessage = async () => {
   }
 }
 
+// JSON 格式化并高亮
+const formatJsonWithHighlight = (data: any): string => {
+  const json = JSON.stringify(data, null, 2)
+  return json
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    // 高亮 key
+    .replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:')
+    // 高亮字符串值
+    .replace(/: "([^"]*)"/g, ': <span class="json-string">"$1"</span>')
+    // 高亮数字
+    .replace(/: (-?\d+\.?\d*)/g, ': <span class="json-number">$1</span>')
+    // 高亮布尔和 null
+    .replace(/: (true|false|null)/g, ': <span class="json-bool">$1</span>')
+}
+
 // Markdown 渲染函数
 const renderMarkdown = (text: string): string => {
   if (!text) return ''
@@ -3692,19 +3792,77 @@ const openOutputFile = async (file: OutputFile) => {
   previewData.value = null
 
   try {
-    const response = await agentApi.preview(file.url, 100)
-    previewData.value = {
-      type: response.type,
-      format: response.format,
-      fileName: response.file_name,
-      fileSize: response.file_size,
-      columns: response.columns,
-      data: response.data,
-      totalRows: response.total_rows,
-      displayedRows: response.displayed_rows,
-      content: response.content,
-      url: response.url,
-      downloadUrl: response.download_url
+    // 检查是否是 Blob URL（前端生成的本地文件）
+    if (file.url.startsWith('blob:')) {
+      // 直接 fetch Blob URL 内容
+      const response = await fetch(file.url)
+      const content = await response.text()
+      const fileSize = content.length
+
+      // 根据文件类型设置预览数据
+      if (file.type === 'markdown') {
+        previewData.value = {
+          type: 'markdown',
+          format: 'md',
+          fileName: file.name,
+          fileSize: fileSize,
+          content: content
+        }
+      } else if (file.type === 'html') {
+        previewData.value = {
+          type: 'html',
+          format: 'html',
+          fileName: file.name,
+          fileSize: fileSize,
+          content: content
+        }
+      } else if (file.type === 'code' || file.name.endsWith('.py') || file.name.endsWith('.js') || file.name.endsWith('.ts')) {
+        const ext = file.name.split('.').pop() || 'txt'
+        previewData.value = {
+          type: 'code',
+          format: ext,
+          fileName: file.name,
+          fileSize: fileSize,
+          content: content
+        }
+      } else {
+        // 尝试解析 JSON
+        try {
+          const jsonContent = JSON.parse(content)
+          previewData.value = {
+            type: 'json',
+            format: 'json',
+            fileName: file.name,
+            fileSize: fileSize,
+            content: jsonContent
+          }
+        } catch {
+          // 默认作为文本处理
+          previewData.value = {
+            type: 'code',
+            format: 'txt',
+            fileName: file.name,
+            fileSize: fileSize,
+            content: content
+          }
+        }
+      }
+    } else {
+      // 服务器文件，调用后端 API
+      const response = await agentApi.preview(file.url, 100)
+      previewData.value = {
+        type: response.type,
+        format: response.format,
+        fileName: response.file_name,
+        fileSize: response.file_size,
+        columns: response.columns,
+        data: response.data,
+        totalRows: response.total_rows,
+        displayedRows: response.displayed_rows,
+        content: response.content,
+        url: response.url,
+        downloadUrl: response.download_url
+      }
     }
   } catch (error: any) {
     previewError.value = error.message || '加载预览失败'
@@ -4183,9 +4341,10 @@ const downloadCurrentFile = async () => {
                           </button>
                           <button
                             class="save-to-notes-btn"
+                            :class="{ 'is-saved': isFileSaved(step.outputFile.url) }"
                             @click.stop="saveToDataNotes(step.outputFile, step.skillName)"
-                            title="保存到便签"
-                          >📌</button>
+                            :title="isFileSaved(step.outputFile.url) ? '已保存到便签' : '保存到便签'"
+                          >{{ isFileSaved(step.outputFile.url) ? '★' : '☆' }}</button>
                         </div>
                         <span v-if="step.status === 'completed' && step.output && !step.outputFile" class="step-output-text-mini">
                           {{ step.output }}
@@ -4418,34 +4577,37 @@ const downloadCurrentFile = async () => {
       </div>
 
       <!-- 右侧结果预览面板 -->
-      <div v-if="showPreviewPanel" class="preview-panel">
-        <div class="preview-header">
-          <div class="preview-title">
-            <span class="preview-icon">{{ currentPreviewFile ? getFileTypeInfo(currentPreviewFile.type).icon : '📄' }}</span>
-            <span class="preview-filename">{{ previewData?.fileName || currentPreviewFile?.name || '预览' }}</span>
-          </div>
-          <div class="preview-actions">
-            <button class="preview-action-btn" @click="downloadCurrentFile" title="下载">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                <polyline points="7 10 12 15 17 10"/>
-                <line x1="12" y1="15" x2="12" y2="3"/>
-              </svg>
-            </button>
-            <button v-if="currentPreviewFile" class="preview-action-btn" @click="saveToDataNotes(currentPreviewFile)" title="保存到便签">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                <polyline points="17 21 17 13 7 13 7 21"/>
-                <polyline points="7 3 7 8 15 8"/>
-              </svg>
-            </button>
-            <button class="preview-close-btn" @click="closePreviewPanel" title="关闭">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="6" x2="6" y2="18"/>
-                <line x1="6" y1="6" x2="18" y2="18"/>
-              </svg>
-            </button>
-          </div>
+      <div v-show="showPreviewPanel" ref="previewPanelRef" class="preview-panel">
+        <!-- 浮动操作按钮 -->
+        <div
+          class="preview-floating-actions"
+          :style="{ left: floatingActionsPos.x + 'px', top: floatingActionsPos.y + 'px' }"
+          @mousedown="startDragFloating"
+        >
+          <button class="floating-btn" @click.stop="downloadCurrentFile" title="下载">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+          </button>
+          <button
+            v-if="currentPreviewFile"
+            class="floating-btn floating-save-btn"
+            :class="{ 'is-saved': isFileSaved(currentPreviewFile.url) }"
+            @click.stop="saveToDataNotes(currentPreviewFile)"
+            :title="isFileSaved(currentPreviewFile.url) ? '取消保存' : '保存到便签'"
+          >
+            <svg viewBox="0 0 24 24" :fill="isFileSaved(currentPreviewFile.url) ? '#f59e0b' : 'none'" stroke="#f59e0b" stroke-width="2">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            </svg>
+          </button>
+          <button class="floating-btn floating-close-btn" @click.stop="closePreviewPanel" title="关闭">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
         </div>
 
         <div class="preview-content">
@@ -4463,12 +4625,6 @@ const downloadCurrentFile = async () => {
 
           <!-- 表格预览 -->
           <div v-else-if="previewData?.type === 'table'" class="preview-table-container">
-            <div class="table-info">
-              <span>共 {{ previewData.totalRows }} 行</span>
-              <span v-if="previewData.totalRows! > previewData.displayedRows!">
-                （显示前 {{ previewData.displayedRows }} 行）
-              </span>
-            </div>
             <div class="table-wrapper">
               <table class="preview-table">
                 <thead>
@@ -4486,8 +4642,8 @@ const downloadCurrentFile = async () => {
           </div>
 
           <!-- JSON 预览 -->
-          <div v-else-if="previewData?.type === 'json'" class="preview-code-container">
-            <pre class="preview-code json">{{ JSON.stringify(previewData.content, null, 2) }}</pre>
+          <div v-else-if="previewData?.type === 'json'" class="preview-json-container">
+            <pre class="preview-json" v-html="formatJsonWithHighlight(previewData.content)"></pre>
           </div>
 
           <!-- Markdown 预览 -->
@@ -4520,8 +4676,11 @@ const downloadCurrentFile = async () => {
         </div>
 
         <div class="preview-footer" v-if="previewData">
+          <span v-if="previewData.type === 'table'" class="row-info">
+            {{ previewData.totalRows }}行<template v-if="previewData.totalRows! > previewData.displayedRows!"> (显示{{ previewData.displayedRows }})</template>
+          </span>
           <span class="file-size">{{ formatFileSize(previewData.fileSize) }}</span>
-          <span class="file-format">{{ previewData.format.toUpperCase() }}</span>
+          <span class="file-format">{{ previewData.format?.toUpperCase() }}</span>
         </div>
       </div>
 
@@ -6659,6 +6818,21 @@ const downloadCurrentFile = async () => {
   transform: scale(1.1);
 }
 
+.save-to-notes-btn.is-saved {
+  opacity: 1;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+}
+
+.save-to-notes-btn.is-saved:hover {
+  background: rgba(245, 158, 11, 0.25);
+}
+
+/* 预览面板保存按钮 */
+.preview-save-btn.is-saved {
+  color: #f59e0b;
+}
+
 .history-text-mini {
   font-size: 10px;
   color: #94a3b8;
@@ -8392,6 +8566,7 @@ const downloadCurrentFile = async () => {
 
 /* ==================== 右侧结果预览面板 ==================== */
 .preview-panel {
+  position: relative;
   width: 480px;
   min-width: 320px;
   max-width: 600px;
@@ -8402,102 +8577,65 @@ const downloadCurrentFile = async () => {
   flex-direction: column;
   flex-shrink: 0;
   box-shadow: -4px 0 16px rgba(0, 0, 0, 0.05);
-}
-
-.preview-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-  border-bottom: 1px solid #e5e7eb;
-  flex-shrink: 0;
-}
-
-.preview-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.preview-icon {
-  font-size: 18px;
-  flex-shrink: 0;
-}
-
-.preview-filename {
-  font-size: 13px;
-  font-weight: 600;
-  color: #374151;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.preview-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.preview-action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  color: #6b7280;
-  cursor: pointer;
   transition: all 0.2s ease;
 }
 
-.preview-action-btn:hover {
+
+/* 浮动操作按钮 - 可拖动 */
+.preview-floating-actions {
+  position: absolute;
+  display: flex;
+  gap: 4px;
+  z-index: 10;
+  background: rgba(255, 255, 255, 0.95);
+  padding: 4px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  cursor: move;
+  user-select: none;
+}
+
+.floating-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  color: #6b7280;
+  cursor: pointer !important;
+  transition: all 0.15s ease;
+}
+
+.floating-btn:hover {
   background: #f3f4f6;
   border-color: #d1d5db;
   color: #374151;
 }
 
-.preview-action-btn svg {
+.floating-btn svg {
   width: 16px;
   height: 16px;
 }
 
-.preview-close-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  color: #9ca3af;
-  cursor: pointer;
-  transition: all 0.2s ease;
+.floating-save-btn.is-saved {
+  background: #fffbeb;
+  border-color: #f59e0b;
 }
 
-.preview-close-btn:hover {
+.floating-close-btn:hover {
   background: #fef2f2;
   border-color: #fecaca;
   color: #ef4444;
 }
 
-.preview-close-btn svg {
-  width: 16px;
-  height: 16px;
-}
-
 .preview-content {
   flex: 1;
   overflow: auto;
-  padding: 16px;
+  padding: 8px;
   background: #fafafa;
 }
 
@@ -8546,23 +8684,12 @@ const downloadCurrentFile = async () => {
   height: 100%;
 }
 
-.table-info {
-  padding: 8px 12px;
-  background: #f1f5f9;
-  border-radius: 8px 8px 0 0;
-  font-size: 12px;
-  color: #64748b;
-  border: 1px solid #e2e8f0;
-  border-bottom: none;
-}
-
 .table-wrapper {
   flex: 1;
   overflow: auto;
-  border: 1px solid #e2e8f0;
-  border-radius: 0 0 8px 8px;
   background: #fff;
 }
+
 
 .preview-table {
   width: 100%;
@@ -8574,18 +8701,20 @@ const downloadCurrentFile = async () => {
   position: sticky;
   top: 0;
   background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-  padding: 10px 12px;
+  padding: 5px 8px;
   text-align: left;
   font-weight: 600;
+  font-size: 11px;
   color: #374151;
-  border-bottom: 2px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
   white-space: nowrap;
 }
 
 .preview-table td {
-  padding: 8px 12px;
+  padding: 4px 8px;
   border-bottom: 1px solid #f1f5f9;
   color: #4b5563;
+  font-size: 11px;
   max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -8602,6 +8731,43 @@ const downloadCurrentFile = async () => {
 
 .preview-table tbody tr:nth-child(even):hover {
   background: #f1f5f9;
+}
+
+/* 代码预览 */
+/* JSON 预览 */
+.preview-json-container {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  overflow: auto;
+  height: 100%;
+}
+
+.preview-json {
+  margin: 0;
+  padding: 12px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #374151;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.preview-json .json-key {
+  color: #0550ae;
+}
+
+.preview-json .json-string {
+  color: #0a3069;
+}
+
+.preview-json .json-number {
+  color: #0550ae;
+}
+
+.preview-json .json-bool {
+  color: #cf222e;
 }
 
 /* 代码预览 */
@@ -8623,10 +8789,6 @@ const downloadCurrentFile = async () => {
   word-wrap: break-word;
 }
 
-.preview-code.json {
-  color: #ce9178;
-}
-
 .preview-code.python {
   color: #9cdcfe;
 }
@@ -8641,7 +8803,7 @@ const downloadCurrentFile = async () => {
   background: #fff;
   border-radius: 8px;
   border: 1px solid #e5e7eb;
-  padding: 20px;
+  padding: 16px;
 }
 
 .markdown-content {
@@ -8823,25 +8985,31 @@ const downloadCurrentFile = async () => {
 .preview-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 10px 16px;
+  gap: 12px;
+  padding: 4px 12px;
   background: #f8fafc;
   border-top: 1px solid #e5e7eb;
-  font-size: 11px;
+  font-size: 10px;
   color: #9ca3af;
   flex-shrink: 0;
 }
 
+.preview-footer .row-info {
+  color: #64748b;
+}
+
 .preview-footer .file-size {
-  font-weight: 500;
+  color: #94a3b8;
 }
 
 .preview-footer .file-format {
   background: #e5e7eb;
-  padding: 2px 8px;
-  border-radius: 4px;
+  padding: 1px 6px;
+  border-radius: 3px;
   font-weight: 600;
+  font-size: 9px;
   color: #6b7280;
+  margin-left: auto;
 }
 
 /* 预览面板滚动条 */

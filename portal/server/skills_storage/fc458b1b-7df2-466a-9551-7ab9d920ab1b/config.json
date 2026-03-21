@@ -1,6 +1,6 @@
 {
-  "name": "帮生成json文件转excel的文件-生成通用版本",
-  "description": "帮生成json文件转excel的文件 生成通用版本",
+  "name": "json-to-excel",
+  "description": "将 JSON 文件转换为 Excel 格式(.xlsx)。输入：JSON文件，输出：Excel表格",
   "icon": "⚡",
   "tags": [
     "自动创建"
