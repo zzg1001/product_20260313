@@ -411,6 +411,27 @@ const handleDrop = (e: DragEvent) => {
 const uploadFiles = async (files: File[]) => {
   isUploading.value = true
   let successCount = 0
+  let targetFolderId = currentFolderId.value
+  let newFolder: DataNote | null = null
+
+  // 多文件上传时，先创建文件夹
+  if (files.length > 1) {
+    try {
+      newFolder = await dataNotesApi.createFolder({
+        name: '新建文件夹',
+        parent_id: currentFolderId.value || undefined,
+        item_ids: []
+      })
+      targetFolderId = newFolder.id
+      notes.value.unshift(newFolder)
+    } catch (e) {
+      console.error('Failed to create folder:', e)
+      toast('创建文件夹失败')
+      isUploading.value = false
+      return
+    }
+  }
+
   for (const file of files) {
     try {
       // 上传文件到服务器
@@ -430,9 +451,12 @@ const uploadFiles = async (files: File[]) => {
           file_type: ext,
           file_url: data.url,
           file_size: formatFileSize(file.size),
-          parent_id: currentFolderId.value || undefined
+          parent_id: targetFolderId || undefined
         })
-        notes.value.unshift(newNote)
+        // 单文件上传时添加到列表，多文件时文件在文件夹内
+        if (files.length === 1) {
+          notes.value.unshift(newNote)
+        }
         successCount++
       }
     } catch (e) {
@@ -440,10 +464,31 @@ const uploadFiles = async (files: File[]) => {
       toast(`上传 ${file.name} 失败`)
     }
   }
+
   isUploading.value = false
+
   if (successCount > 0) {
     toast(`已上传 ${successCount} 个文件`)
     notifyDataChange()
+
+    // 多文件上传完成后，更新文件夹项目数并进入编辑名称状态
+    if (newFolder) {
+      // 更新文件夹的 item_count
+      const folderInList = notes.value.find(n => n.id === newFolder!.id)
+      if (folderInList) {
+        folderInList.item_count = successCount
+      }
+      // 自动进入编辑名字状态
+      nextTick(() => {
+        editingId.value = newFolder!.id
+        editingName.value = newFolder!.name
+        nextTick(() => {
+          const input = document.querySelector('.edit-input') as HTMLInputElement
+          input?.focus()
+          input?.select()
+        })
+      })
+    }
   }
 }
 
