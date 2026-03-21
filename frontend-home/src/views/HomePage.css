@@ -158,6 +158,19 @@
   color: var(--primary);
 }
 
+.btn-lang {
+  font-weight: 600;
+  min-width: 36px;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.btn-lang:hover {
+  border-color: var(--primary);
+  background: rgba(79, 70, 229, 0.05);
+}
+
 .btn-primary {
   background: var(--primary);
   color: white;
