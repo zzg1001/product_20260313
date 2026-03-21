@@ -155,6 +155,48 @@ interface UploadedFile {
 }
 const uploadedFiles = ref<UploadedFile[]>([])
 const fileInputRef = ref<HTMLInputElement | null>(null)
+const isDragOverInput = ref(false)
+
+// 处理从 data 便签拖入的文件
+const handleDataNoteDragOver = (e: DragEvent) => {
+  if (e.dataTransfer?.types.includes('application/data-note')) {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    isDragOverInput.value = true
+  }
+}
+
+const handleDataNoteDragLeave = (e: DragEvent) => {
+  isDragOverInput.value = false
+}
+
+const handleDataNoteDrop = (e: DragEvent) => {
+  e.preventDefault()
+  isDragOverInput.value = false
+
+  const dataStr = e.dataTransfer?.getData('application/data-note')
+  if (!dataStr) return
+
+  try {
+    const note = JSON.parse(dataStr)
+    // 添加到上传文件列表
+    const file: UploadedFile = {
+      id: note.id,
+      name: note.name,
+      size: 0,
+      type: note.file_type,
+      uploading: false,
+      serverPath: note.file_url,
+      url: note.file_url
+    }
+    // 检查是否已存在
+    if (!uploadedFiles.value.some(f => f.serverPath === note.file_url)) {
+      uploadedFiles.value.push(file)
+    }
+  } catch (err) {
+    console.error('Failed to parse dropped data note:', err)
+  }
+}
 
 // 数据便签（用于"/"补全和保存）
 const dataNotesForSlash = ref<DataNote[]>([])
@@ -617,6 +659,48 @@ const hasLeftDockArea = ref(false)  // 是否已经离开过停靠区域
 const panelFileInputRef = ref<HTMLInputElement | null>(null)
 const panelUploadedFiles = ref<UploadedFile[]>([])
 const panelIsDragging = ref(false)
+const panelDragOverInput = ref(false)
+
+// 面板区域处理从 data 便签拖入的文件
+const handlePanelDataNoteDragOver = (e: DragEvent) => {
+  if (e.dataTransfer?.types.includes('application/data-note')) {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    panelDragOverInput.value = true
+  }
+}
+
+const handlePanelDataNoteDragLeave = () => {
+  panelDragOverInput.value = false
+}
+
+const handlePanelDataNoteDrop = (e: DragEvent) => {
+  e.preventDefault()
+  panelDragOverInput.value = false
+
+  const dataStr = e.dataTransfer?.getData('application/data-note')
+  if (!dataStr) return
+
+  try {
+    const note = JSON.parse(dataStr)
+    // 添加到面板上传文件列表
+    const file: UploadedFile = {
+      id: note.id,
+      name: note.name,
+      size: 0,
+      type: note.file_type,
+      uploading: false,
+      serverPath: note.file_url,
+      url: note.file_url
+    }
+    // 检查是否已存在
+    if (!panelUploadedFiles.value.some(f => f.serverPath === note.file_url)) {
+      panelUploadedFiles.value.push(file)
+    }
+  } catch (err) {
+    console.error('Failed to parse dropped data note:', err)
+  }
+}
 const panelCollectedFilePaths = ref<string[]>([])  // 收集的文件路径，执行时传递
 
 // 开始拖拽移动面板（通过头部拖拽）
@@ -4477,7 +4561,13 @@ const downloadCurrentFile = async () => {
 
 
         <!-- 输入区域 -->
-        <div class="chat-input">
+        <div
+          class="chat-input"
+          :class="{ 'drag-over': isDragOverInput }"
+          @dragover="handleDataNoteDragOver"
+          @dragleave="handleDataNoteDragLeave"
+          @drop="handleDataNoteDrop"
+        >
           <!-- 待发送的数据引用 -->
           <div v-if="pendingRefs.length > 0" class="pending-refs">
             <div
@@ -4872,7 +4962,15 @@ const downloadCurrentFile = async () => {
               </div>
 
               <!-- 输入状态 -->
-              <div v-else key="input" class="panel-input-area">
+              <div
+                v-else
+                key="input"
+                class="panel-input-area"
+                :class="{ 'drag-over': panelDragOverInput }"
+                @dragover="handlePanelDataNoteDragOver"
+                @dragleave="handlePanelDataNoteDragLeave"
+                @drop="handlePanelDataNoteDrop"
+              >
                 <!-- 隐藏的文件输入 -->
                 <input
                   ref="panelFileInputRef"
@@ -7203,6 +7301,17 @@ const downloadCurrentFile = async () => {
   padding: 14px 20px;
   background: #fff;
   border-top: 1px solid #e5e7eb;
+  transition: all 0.15s ease;
+}
+
+.chat-input.drag-over {
+  background: #e8f5e9;
+  border-top-color: #4caf50;
+}
+
+.chat-input.drag-over .input-wrapper {
+  border-color: #4caf50;
+  background: #f1f8e9;
 }
 
 .input-wrapper {
@@ -8181,6 +8290,14 @@ const downloadCurrentFile = async () => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  transition: all 0.15s ease;
+}
+
+.panel-input-area.drag-over {
+  background: #e8f5e9;
+  border-radius: 8px;
+  padding: 8px;
+  margin: -8px;
 }
 
 /* 面板输入框容器 - 与主聊天风格一致 */

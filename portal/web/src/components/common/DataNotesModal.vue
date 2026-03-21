@@ -265,6 +265,22 @@ const dblClickCard = (note: DataNote) => {
   }
 }
 
+// 拖拽开始 - 用于拖到输入框
+const handleDragStart = (e: DragEvent, note: DataNote) => {
+  if (note.file_type === 'folder' || !note.file_url) {
+    e.preventDefault()
+    return
+  }
+  e.dataTransfer?.setData('application/data-note', JSON.stringify({
+    id: note.id,
+    name: note.name,
+    file_url: note.file_url,
+    file_type: note.file_type,
+    file_size: note.file_size
+  }))
+  e.dataTransfer!.effectAllowed = 'copy'
+}
+
 // 开始编辑名字
 const startEdit = (note: DataNote, e: Event) => {
   e.stopPropagation()
@@ -513,6 +529,8 @@ onMounted(async () => {
             :key="note.id"
             class="card"
             :class="{ favorited: note.is_favorited, selected: selectedIds.has(note.id), folder: note.file_type === 'folder' }"
+            :draggable="note.file_type !== 'folder' && !!note.file_url"
+            @dragstart="handleDragStart($event, note)"
             @click="clickCard(note)"
             @dblclick="dblClickCard(note)"
           >
@@ -557,6 +575,8 @@ onMounted(async () => {
             :key="note.id"
             class="card"
             :class="{ favorited: note.is_favorited, selected: selectedIds.has(note.id), folder: note.file_type === 'folder' }"
+            :draggable="note.file_type !== 'folder' && !!note.file_url"
+            @dragstart="handleDragStart($event, note)"
             @click="clickCard(note)"
             @dblclick="dblClickCard(note)"
           >
@@ -896,6 +916,14 @@ onMounted(async () => {
   background: #fffef5;
   border-color: #d4c99e;
   box-shadow: 0 2px 8px rgba(180, 160, 100, 0.2);
+}
+
+.card[draggable="true"] {
+  cursor: grab;
+}
+
+.card[draggable="true"]:active {
+  cursor: grabbing;
 }
 
 .card.favorited {
