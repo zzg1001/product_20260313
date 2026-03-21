@@ -183,6 +183,11 @@ const previewError = ref('')
 const previewData = ref<FilePreview | null>(null)
 const currentPreviewFile = ref<OutputFile | null>(null)
 const previewPanelRef = ref<HTMLElement | null>(null)
+const isPreviewFullscreen = ref(false)
+
+const togglePreviewFullscreen = () => {
+  isPreviewFullscreen.value = !isPreviewFullscreen.value
+}
 
 // 浮动按钮拖动
 const floatingActionsPos = ref({ x: -100, y: 8 })
@@ -3876,6 +3881,7 @@ const closePreviewPanel = () => {
   showPreviewPanel.value = false
   previewData.value = null
   currentPreviewFile.value = null
+  isPreviewFullscreen.value = false
 }
 
 // 下载当前预览的文件
@@ -4577,7 +4583,7 @@ const downloadCurrentFile = async () => {
       </div>
 
       <!-- 右侧结果预览面板 -->
-      <div v-show="showPreviewPanel" ref="previewPanelRef" class="preview-panel">
+      <div v-show="showPreviewPanel" ref="previewPanelRef" class="preview-panel" :class="{ 'is-fullscreen': isPreviewFullscreen }">
         <!-- 浮动操作按钮 -->
         <div
           class="preview-floating-actions"
@@ -4600,6 +4606,14 @@ const downloadCurrentFile = async () => {
           >
             <svg viewBox="0 0 24 24" :fill="isFileSaved(currentPreviewFile.url) ? '#f59e0b' : 'none'" stroke="#f59e0b" stroke-width="2">
               <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            </svg>
+          </button>
+          <button class="floating-btn" @click.stop="togglePreviewFullscreen" :title="isPreviewFullscreen ? '退出全屏' : '全屏'">
+            <svg v-if="!isPreviewFullscreen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+            </svg>
+            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 14h6v6m10-10h-6V4M4 10h6V4m10 10h-6v6"/>
             </svg>
           </button>
           <button class="floating-btn floating-close-btn" @click.stop="closePreviewPanel" title="关闭">
@@ -8580,6 +8594,19 @@ const downloadCurrentFile = async () => {
   transition: all 0.2s ease;
 }
 
+/* 全屏模式 */
+.preview-panel.is-fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  max-width: none;
+  z-index: 100;
+  border-left: none;
+  box-shadow: none;
+}
 
 /* 浮动操作按钮 - 可拖动 */
 .preview-floating-actions {
