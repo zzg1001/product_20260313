@@ -11,7 +11,7 @@ export const config = {
   wsUrl: import.meta.env.VITE_WS_URL || 'ws://localhost:8000',
 
   // Home page URL
-  homeUrl: import.meta.env.VITE_HOME_URL || 'http://localhost:5177',
+  homeUrl: import.meta.env.VITE_HOME_URL || 'http://localhost:5175',
 
   // Admin URL
   adminUrl: import.meta.env.VITE_ADMIN_URL || 'http://localhost:5174',

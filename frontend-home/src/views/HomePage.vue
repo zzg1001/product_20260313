@@ -405,19 +405,6 @@ function scrollTo(id: string) {
           <span class="customer-logo">微软</span>
         </div>
 
-        <div class="testimonial">
-          <p class="testimonial-quote">
-            宜氪数据的智能制造解决方案帮助我们实现了生产线的全面数字化升级，
-            设备利用率提升了35%，故障预警准确率达到95%以上，显著降低了运维成本。
-          </p>
-          <div class="testimonial-author">
-            <div class="testimonial-avatar">张</div>
-            <div class="testimonial-info">
-              <div class="testimonial-name">张总监</div>
-              <div class="testimonial-role">某世界500强制造企业 · 数字化负责人</div>
-            </div>
-          </div>
-        </div>
       </div>
     </section>
 
