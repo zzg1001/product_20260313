@@ -10,7 +10,10 @@ from schemas.agent import (
     ChatRequest, ChatResponse,
     PlanRequest, PlanResponse,
     ExecuteRequest, ExecuteResponse, OutputFile,
-    AnalyzeRequest, AnalyzeResponse, AnalyzeCodeResult
+    AnalyzeRequest, AnalyzeResponse, AnalyzeCodeResult,
+    SkillChatRequest, SkillChatMessage,
+    SkillExecuteInteractiveRequest,
+    AgentLoopRequest, ToolCall
 )
 from services.agent_service import AgentService
 from services.file_generator import generate_output_file
@@ -506,6 +509,39 @@ async def preview_file(file_path: str, max_rows: int = 100):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"读取代码文件失败: {str(e)}")
 
+    # PPT 文件
+    elif suffix in ['.ppt', '.pptx']:
+        return {
+            "type": "ppt",
+            "format": suffix.lstrip('.'),
+            "file_name": full_path.name,
+            "file_size": file_size,
+            "url": f"/{file_path}" if not file_path.startswith('/') else file_path,
+            "download_url": f"/{file_path}" if not file_path.startswith('/') else file_path
+        }
+
+    # Word 文件
+    elif suffix in ['.doc', '.docx']:
+        return {
+            "type": "word",
+            "format": suffix.lstrip('.'),
+            "file_name": full_path.name,
+            "file_size": file_size,
+            "url": f"/{file_path}" if not file_path.startswith('/') else file_path,
+            "download_url": f"/{file_path}" if not file_path.startswith('/') else file_path
+        }
+
+    # PDF 文件
+    elif suffix == '.pdf':
+        return {
+            "type": "pdf",
+            "format": "pdf",
+            "file_name": full_path.name,
+            "file_size": file_size,
+            "url": f"/{file_path}" if not file_path.startswith('/') else file_path,
+            "download_url": f"/{file_path}" if not file_path.startswith('/') else file_path
+        }
+
     # 其他文件
     else:
         return {
@@ -893,3 +929,230 @@ print(df.describe())
             success=False,
             error=str(e)
         )
+
+
+# ========== Claude Code 风格：步骤化技能执行 ==========
+
+@router.post("/skill-chat")
+async def skill_chat_stream(request: SkillChatRequest, db: Session = Depends(get_db)):
+    """
+    Claude Code 风格的交互式技能执行（SSE 流式）
+
+    AI 会将任务拆分成具体操作步骤，每个步骤需要用户确认后才执行。
+
+    SSE 事件类型:
+    - content: AI 输出的文本片段
+    - actions_planned: AI 规划的所有操作列表
+    - action_pending: 等待用户确认的操作
+    - action_executing: 正在执行的操作
+    - action_result: 操作执行结果
+    - action_skipped: 用户跳过的操作
+    - all_actions_done: 所有操作完成
+    - done: 执行完成（无操作时）
+    - error: 错误信息
+
+    Request:
+    {
+        "skill_id": "uuid",
+        "context": "用户原始需求",
+        "conversation": [{"role": "user/assistant", "content": "..."}],
+        "file_paths": ["path1", "path2"],
+        "user_choice": "execute" | "skip" | null,
+        "pending_actions": [{"type": "write", "data": {...}}],
+        "current_action_index": 0
+    }
+    """
+    from models.skill import Skill
+
+    skill = db.query(Skill).filter(Skill.id == request.skill_id).first()
+    skill_name = skill.name if skill else request.skill_id
+
+    log_session_start(
+        api_name="POST /agent/skill-chat",
+        api_desc=f"交互式技能执行 - {skill_name}",
+        source="技能面板",
+        skills=[skill_name],
+        user_input=request.context[:100] if request.context else None
+    )
+
+    service = AgentService(db)
+
+    async def generate():
+        try:
+            # 转换对话历史格式
+            conversation = [
+                {"role": msg.role, "content": msg.content}
+                for msg in request.conversation
+            ] if request.conversation else []
+
+            # 转换操作列表格式
+            pending_actions = [
+                {"type": act.type, "data": act.data}
+                for act in request.pending_actions
+            ] if request.pending_actions else None
+
+            async for chunk in service.skill_chat_stream(
+                skill_id=request.skill_id,
+                context=request.context,
+                conversation=conversation,
+                file_paths=request.file_paths,
+                user_choice=request.user_choice,
+                pending_actions=pending_actions,
+                current_action_index=request.current_action_index
+            ):
+                yield f"data: {chunk}\n\n"
+
+            log_session_end(True, "技能执行完成")
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            log_error(f"技能执行失败: {str(e)[:50]}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            log_session_end(False, str(e)[:50])
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+# ========== Claude Code 风格：系统级工具调用确认 ==========
+
+@router.post("/execute-interactive")
+async def skill_execute_interactive(request: SkillExecuteInteractiveRequest, db: Session = Depends(get_db)):
+    """
+    Claude Code 风格的交互式技能执行（SSE 流式）
+
+    系统级工具调用确认 - 不需要 AI 输出 ACTION 标记，
+    后端根据技能类型自动规划操作步骤，每个步骤执行前发送确认请求。
+
+    SSE 事件类型:
+    - steps_planned: 规划的所有步骤
+    - step_confirm: 等待用户确认的步骤
+    - step_executing: 正在执行的步骤
+    - step_result: 步骤执行结果
+    - all_done: 全部完成
+    - error: 错误信息
+    """
+    from models.skill import Skill
+
+    skill = db.query(Skill).filter(Skill.id == request.skill_id).first()
+    skill_name = skill.name if skill else request.skill_id
+
+    log_session_start(
+        api_name="POST /agent/execute-interactive",
+        api_desc=f"交互式执行 - {skill_name}",
+        source="技能面板",
+        skills=[skill_name],
+        user_input=request.context[:100] if request.context else None
+    )
+
+    service = AgentService(db)
+
+    async def generate():
+        try:
+            async for chunk in service.skill_execute_interactive(
+                skill_id=request.skill_id,
+                context=request.context,
+                file_paths=request.file_paths,
+                confirmed_step=request.confirmed_step,
+                auto_confirm=request.auto_confirm,
+                skip_current=request.skip_current
+            ):
+                yield f"data: {chunk}\n\n"
+
+            log_session_end(True, "交互式执行完成")
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            log_error(f"交互式执行失败: {str(e)[:50]}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            log_session_end(False, str(e)[:50])
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+# ========== 真正的 Claude Code 风格：多轮 AI 交互循环 ==========
+
+@router.post("/loop")
+async def agent_loop(request: AgentLoopRequest, db: Session = Depends(get_db)):
+    """
+    Claude Code 风格的 Agent 循环（SSE 流式）
+
+    真正的多轮 AI 交互：
+    1. AI 思考并决定使用什么工具
+    2. 发送工具调用给前端，等待用户确认
+    3. 用户确认后执行工具，结果返回给 AI
+    4. AI 继续思考，决定下一步
+    5. 循环直到任务完成
+
+    SSE 事件类型:
+    - thinking: AI 正在思考
+    - tool_call: AI 要调用工具，等待确认
+    - tool_result: 工具执行结果
+    - message: AI 的文字消息
+    - done: 任务完成
+    - error: 错误
+    """
+    from models.skill import Skill
+
+    skill = db.query(Skill).filter(Skill.id == request.skill_id).first()
+    skill_name = skill.name if skill else request.skill_id
+
+    log_session_start(
+        api_name="POST /agent/loop",
+        api_desc=f"Agent Loop - {skill_name}",
+        source="技能面板",
+        skills=[skill_name],
+        user_input=request.context[:100] if request.context else None
+    )
+
+    service = AgentService(db)
+
+    async def generate():
+        try:
+            async for event in service.agent_loop(
+                skill_id=request.skill_id,
+                context=request.context,
+                file_paths=request.file_paths,
+                conversation=request.conversation,
+                pending_tool_call=request.pending_tool_call,
+                tool_confirmed=request.tool_confirmed,
+                tool_rejected=request.tool_rejected,
+                user_edit=request.user_edit
+            ):
+                yield f"data: {event}\n\n"
+
+            log_session_end(True, "Agent Loop 完成")
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            log_error(f"Agent Loop 失败: {str(e)[:50]}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            log_session_end(False, str(e)[:50])
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )

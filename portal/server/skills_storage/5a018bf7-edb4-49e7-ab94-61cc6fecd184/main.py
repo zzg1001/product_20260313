@@ -1,119 +1,130 @@
 #!/usr/bin/env python3
-"""Excel to JSON converter script."""
+"""Excel to JSON converter - 可独立运行或被系统调用"""
 
 import json
-import argparse
+import sys
+import os
 from pathlib import Path
 from datetime import datetime
-from openpyxl import load_workbook
 
+# 获取目录路径
+SCRIPT_DIR = Path(__file__).parent
+SERVER_DIR = SCRIPT_DIR.parent.parent
+OUTPUTS_DIR = SERVER_DIR / "outputs"
+UPLOADS_DIR = SERVER_DIR / "uploads"
 
-def convert_value(cell):
-    """Convert cell value to JSON-compatible type."""
-    value = cell.value
+def generate_unique_filename(prefix, ext):
+    """生成唯一文件名"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    import uuid
+    return f"{prefix}_{timestamp}_{uuid.uuid4().hex[:8]}.{ext}"
+
+def convert_value(value):
+    """转换值为 JSON 兼容类型"""
     if value is None:
         return None
     if isinstance(value, datetime):
         return value.isoformat()
+    if hasattr(value, 'isoformat'):  # pandas Timestamp
+        return value.isoformat()
     return value
 
-
-def excel_to_json(input_path, sheet=None, output_path=None, compact=False):
-    """Convert Excel file to JSON.
+def excel_to_json(input_path, output_path=None):
+    """
+    将 Excel 文件转换为 JSON
 
     Args:
         input_path: Excel 文件路径
-        sheet: 工作表名称或索引
-        output_path: 输出路径（如果提供则写入文件）
-        compact: 是否压缩 JSON
+        output_path: 输出 JSON 文件路径（可选，不提供则自动生成）
 
     Returns:
-        转换后的数据列表
+        dict: 包含状态、消息和输出文件信息
     """
-    wb = load_workbook(input_path, data_only=True)
+    import pandas as pd
 
-    # Select sheet
-    if sheet is None:
-        ws = wb.active
-    elif isinstance(sheet, int):
-        ws = wb.worksheets[sheet]
+    # 确保输出目录存在
+    OUTPUTS_DIR.mkdir(exist_ok=True)
+
+    # 读取 Excel
+    try:
+        df = pd.read_excel(input_path)
+    except Exception as e:
+        return {'status': 'error', 'message': f'读取 Excel 失败: {e}'}
+
+    # 处理 NaN 和日期
+    for col in df.columns:
+        if df[col].dtype == 'datetime64[ns]':
+            df[col] = df[col].apply(lambda x: x.isoformat() if pd.notna(x) else None)
+        else:
+            df[col] = df[col].where(pd.notna(df[col]), None)
+
+    # 转换为字典列表
+    data = df.to_dict(orient='records')
+
+    # 生成输出路径
+    if output_path is None:
+        output_name = generate_unique_filename('output', 'json')
+        output_path = OUTPUTS_DIR / output_name
     else:
-        ws = wb[sheet]
+        output_path = Path(output_path)
+        output_name = output_path.name
 
-    # Get all rows
-    rows = list(ws.iter_rows())
-    if not rows:
-        return []
+    # 写入 JSON
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2, default=str)
 
-    # First row as headers
-    headers = [cell.value for cell in rows[0]]
+    print(f"[OK] 转换完成: {output_path}")
+    print(f"    共 {len(data)} 条记录")
 
-    # Convert remaining rows to objects
-    data = []
-    for row in rows[1:]:
-        obj = {}
-        for header, cell in zip(headers, row):
-            if header is not None:
-                obj[header] = convert_value(cell)
-        data.append(obj)
-
-    # 只有明确指定 output_path 时才写入文件
-    if output_path is not None:
-        with open(output_path, 'w', encoding='utf-8') as f:
-            if compact:
-                json.dump(data, f, ensure_ascii=False)
-            else:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        print(f"✓ 转换完成: {output_path}")
-
-    print(f"  共 {len(data)} 条记录")
-    return data
-
+    return {
+        'status': 'success',
+        'message': f'转换完成，共 {len(data)} 条记录',
+        'content': data,
+        '_output_file': {
+            'path': str(output_path),
+            'type': 'json',
+            'name': output_name,
+            'url': f'/outputs/{output_name}'
+        }
+    }
 
 def main(params):
-    """API 入口函数"""
-    files = params.get('files', [])
+    """API 入口函数 - 被系统调用"""
+    files = params.get('files', []) or params.get('file_paths', [])
     file_path = params.get('file_path', '')
 
     input_file = files[0] if files else file_path
     if not input_file:
         return {'status': 'error', 'message': '请上传 Excel 文件'}
 
-    try:
-        data = excel_to_json(input_file)
+    # 处理路径
+    if input_file.startswith('/uploads/'):
+        input_file = str(UPLOADS_DIR / input_file[len('/uploads/'):])
+    elif input_file.startswith('uploads/'):
+        input_file = str(UPLOADS_DIR / input_file[len('uploads/'):])
 
-        # 生成输出文件
-        output_path = OUTPUTS_DIR / generate_unique_filename('output', 'json')
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
-        return {
-            'status': 'success',
-            'message': f'转换完成，共 {len(data)} 条记录',
-            'content': data,
-            '_output_file': {
-                'path': str(output_path),
-                'type': 'json',
-                'name': output_path.name,
-                'url': f'/outputs/{output_path.name}'
-            }
-        }
-    except Exception as e:
-        return {'status': 'error', 'message': str(e)}
+    return excel_to_json(input_file)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Convert Excel to JSON")
-    parser.add_argument("input", help="Input Excel file path")
-    parser.add_argument("--sheet", help="Sheet name or index (0-based)")
-    parser.add_argument("--output", "-o", help="Output JSON file path")
-    parser.add_argument("--compact", action="store_true", help="Output compact JSON")
+    # 命令行模式
+    if len(sys.argv) < 2:
+        print("用法: python main.py <input.xlsx> [output.json]")
+        print("示例: python main.py data.xlsx output.json")
+        sys.exit(1)
 
-    args = parser.parse_args()
+    input_path = sys.argv[1]
+    output_path = sys.argv[2] if len(sys.argv) > 2 else None
 
-    # Parse sheet argument
-    sheet = args.sheet
-    if sheet is not None and sheet.isdigit():
-        sheet = int(sheet)
+    # 处理相对路径
+    if not os.path.isabs(input_path):
+        if input_path.startswith('uploads/'):
+            input_path = str(UPLOADS_DIR / input_path[len('uploads/'):])
+        elif os.path.exists(UPLOADS_DIR / input_path):
+            input_path = str(UPLOADS_DIR / input_path)
 
-    excel_to_json(args.input, sheet, args.output, args.compact)
+    result = excel_to_json(input_path, output_path)
+
+    if result['status'] == 'error':
+        print(f"错误: {result['message']}")
+        sys.exit(1)

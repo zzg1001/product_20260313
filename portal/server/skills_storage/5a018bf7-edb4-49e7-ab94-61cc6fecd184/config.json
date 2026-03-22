@@ -2,12 +2,11 @@
   "name": "excel-to-json",
   "description": "将 Excel 文件(.xlsx/.xls)转换为 JSON 格式。输入：Excel文件，输出：JSON数据",
   "icon": "⚡",
-  "tags": [
-    "自动创建"
-  ],
+  "tags": ["转换", "数据处理"],
   "author": null,
   "version": "1.0.0",
   "entry_script": "main.py",
   "type": "python",
+  "exec_mode": "direct",
   "output_config": null
 }

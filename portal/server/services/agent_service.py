@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from io import StringIO
 from pathlib import Path
@@ -19,6 +20,8 @@ settings = get_settings()
 SKILLS_STORAGE_DIR = Path(__file__).parent.parent / "skills_storage"
 # 上传文件目录
 UPLOADS_DIR = Path(__file__).parent.parent / "uploads"
+# Server 根目录（用于查找 node_modules）
+SERVER_DIR = Path(__file__).parent.parent
 
 
 class AgentService:
@@ -109,6 +112,13 @@ class AgentService:
 ## 核心职责
 当用户提出**任务型请求**时，分析并规划技能执行流程。
 
+## 技能匹配规则
+**重要**：优先使用已存在的技能！匹配时注意：
+- "ppt"、"PPT"、"幻灯片"、"演示文稿" → 使用 **pptx** 技能
+- "excel"、"表格"、"xlsx" → 使用相关 Excel 技能
+- 如果有近似名称的技能存在，使用它而不是建议创建新技能
+- 只有当确实没有合适的技能时，才设置 exists: false
+
 ## 技能规划格式
 如果识别到任务请求，在回复末尾添加：
 <!--SKILL_PLAN:[{{"skill":"技能名","action":"操作描述","exists":true/false}}]-->
@@ -156,11 +166,19 @@ class AgentService:
 2. 将步骤映射到可用的 Skills
 3. 在回复末尾输出技能规划（使用特定格式）
 
+## 技能匹配规则（最重要）
+**必须优先使用已存在的技能！** 匹配时注意：
+- "ppt"、"PPT"、"幻灯片"、"演示文稿"、"slides" → 使用 **pptx** 技能
+- "excel"、"表格"、"xlsx"、"xls" → 使用相关 Excel 技能
+- "word"、"文档"、"docx" → 使用相关 Word 技能
+- 如果有**名称相似或功能匹配**的技能存在，**必须使用它**，设置 exists: true
+- 只有当 Available skills 列表中**确实没有**任何合适的技能时，才设置 exists: false
+
 ## 技能规划格式
 如果识别到任务请求，请在回复**末尾**添加如下格式（必须是最后一行）：
 <!--SKILL_PLAN:[{{"skill":"技能名","action":"操作描述","exists":true/false}}]-->
 
-- `skill`: 技能名称（匹配已有技能用已有名称，否则用建议的新名称，如 data-analyzer）
+- `skill`: 技能名称（**必须使用 Available skills 中存在的技能名称**，而不是自己编造的名称）
 - `action`: 这一步要做什么
 - `exists`: 检查 Available skills 列表判断技能是否存在
 
@@ -346,8 +364,45 @@ If no suitable skills are found, return an empty plan with an explanation."""
             clean_content = re.sub(pattern, '', ai_output.strip(), count=1, flags=re.IGNORECASE)
             return output_format, clean_content.strip()
 
-        # 不做智能检测，默认就是 md
-        # 只有明确声明 <!--OUTPUT_FORMAT:xxx--> 才用其他格式
+        # 自动检测 pptxgenjs 代码（用于 PPT skill）
+        # 检查是否包含 pptxgenjs 特征
+        pptx_patterns = [
+            (r'require\s*\(\s*["\']pptxgenjs["\']', 'require pptxgenjs'),
+            (r'new\s+pptxgen\s*\(', 'new pptxgen'),
+            (r'\.addSlide\s*\(', 'addSlide'),
+            (r'\.writeFile\s*\(', 'writeFile'),
+            (r'\.addText\s*\(', 'addText'),
+            (r'\.addShape\s*\(', 'addShape'),
+            (r'pres\s*=', 'pres ='),
+            (r'let\s+pres\b', 'let pres'),
+            (r'const\s+pres\b', 'const pres'),
+        ]
+
+        matched_patterns = []
+        for pattern, name in pptx_patterns:
+            if re.search(pattern, ai_output, re.IGNORECASE):
+                matched_patterns.append(name)
+
+        print(f"[_parse_output_format] AI output length: {len(ai_output)}")
+        print(f"[_parse_output_format] AI output preview: {ai_output[:300]}...")
+        print(f"[_parse_output_format] Matched PPTX patterns: {matched_patterns}")
+
+        # 如果匹配到 2 个以上特征，认为是 pptxgenjs 代码
+        if len(matched_patterns) >= 2:
+            print(f"[_parse_output_format] ✓ Detected pptxgenjs code!")
+            # 提取代码块
+            code_match = re.search(r'```(?:javascript|js)?\s*\n(.*?)```', ai_output, re.DOTALL)
+            if code_match:
+                extracted_code = code_match.group(1).strip()
+                print(f"[_parse_output_format] Extracted code from code block, length: {len(extracted_code)}")
+                return "pptx_code", extracted_code
+            else:
+                # 没有代码块包裹，直接返回整个内容
+                print(f"[_parse_output_format] No code block found, using full output")
+                return "pptx_code", ai_output.strip()
+
+        # 默认 md
+        print(f"[_parse_output_format] No PPTX patterns detected, defaulting to md")
         return "md", ai_output
 
     def _execute_image_code(self, code: str, skill_name: str) -> Optional[dict]:
@@ -484,6 +539,181 @@ OUTPUT_PATH = r'{output_path}'
             print(f"[Img Process] Execution failed: {e}")
 
         return None
+
+    def _execute_pptx_code(self, code: str, skill_name: str, timeout: int = 120) -> Optional[dict]:
+        """
+        执行 pptxgenjs JavaScript 代码生成 PPT 文件
+
+        Args:
+            code: JavaScript 代码（使用 pptxgenjs）
+            skill_name: 技能名称（用于生成文件名）
+            timeout: 执行超时秒数
+
+        Returns:
+            成功时返回文件信息 dict，失败返回 None
+        """
+        import tempfile
+        import subprocess
+        import time
+        import shutil
+
+        try:
+            timestamp = int(time.time())
+            output_filename = f"{skill_name}_{timestamp}.pptx"
+            output_path = OUTPUTS_DIR / output_filename
+
+            # 检查 node 是否可用
+            node_path = shutil.which('node')
+            npm_path = shutil.which('npm')
+            if not node_path:
+                print("[PPTX Code] Node.js not found in PATH")
+                return None
+
+            # 检查并安装 pptxgenjs（在 server 目录下）
+            node_modules_path = SERVER_DIR / "node_modules" / "pptxgenjs"
+            if not node_modules_path.exists():
+                print(f"[PPTX Code] pptxgenjs not found at {node_modules_path}, installing...")
+                if npm_path:
+                    install_result = subprocess.run(
+                        [npm_path, "install", "pptxgenjs"],
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        cwd=str(SERVER_DIR)
+                    )
+                    if install_result.returncode != 0:
+                        print(f"[PPTX Code] npm install failed: {install_result.stderr}")
+                        return None
+                    print("[PPTX Code] pptxgenjs installed successfully")
+                else:
+                    print("[PPTX Code] npm not found, cannot install pptxgenjs")
+                    return None
+            else:
+                print(f"[PPTX Code] pptxgenjs found at {node_modules_path}")
+
+            # 清理代码：移除 markdown 代码块标记
+            clean_code = code.strip()
+            if clean_code.startswith('```javascript'):
+                clean_code = clean_code[len('```javascript'):].strip()
+            elif clean_code.startswith('```js'):
+                clean_code = clean_code[len('```js'):].strip()
+            elif clean_code.startswith('```'):
+                clean_code = clean_code[3:].strip()
+            if clean_code.endswith('```'):
+                clean_code = clean_code[:-3].strip()
+
+            # 将 Windows 路径转换为正斜杠（JavaScript 兼容）
+            output_path_str = str(output_path).replace('\\', '/')
+
+            # 修改代码中的输出文件路径
+            import re
+            # 替换 writeFile 调用中的文件名
+            clean_code = re.sub(
+                r'writeFile\s*\(\s*\{[^}]*fileName\s*:\s*["\'][^"\']*["\']',
+                f'writeFile({{ fileName: "{output_path_str}"',
+                clean_code
+            )
+            # 也处理简单的 writeFile("filename.pptx") 格式
+            clean_code = re.sub(
+                r'writeFile\s*\(\s*["\'][^"\']+\.pptx["\']',
+                f'writeFile("{output_path_str}"',
+                clean_code
+            )
+
+            # 如果代码没有 writeFile，添加一个
+            if 'writeFile' not in clean_code:
+                clean_code += f'\npres.writeFile({{ fileName: "{output_path_str}" }});'
+
+            # 创建临时脚本
+            # 需要包装成 async/await 以等待 writeFile 完成
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.js', delete=False, encoding='utf-8') as f:
+                # 检查代码是否已经是 async 函数
+                if 'async' in clean_code and 'await' in clean_code:
+                    wrapped_code = f'''
+const pptxgen = require("pptxgenjs");
+
+{clean_code}
+'''
+                else:
+                    # 将代码包装成 async 函数并等待 writeFile
+                    # 替换 writeFile 为 await writeFile
+                    async_code = clean_code
+                    if '.writeFile(' in async_code and 'await' not in async_code:
+                        async_code = re.sub(
+                            r'(pres\.writeFile\s*\([^)]*\))',
+                            r'await \1',
+                            async_code
+                        )
+
+                    wrapped_code = f'''
+const pptxgen = require("pptxgenjs");
+
+(async () => {{
+{async_code}
+}})().catch(err => {{
+    console.error("Error:", err);
+    process.exit(1);
+}});
+'''
+                f.write(wrapped_code)
+                script_path = f.name
+
+            print(f"[PPTX Code] Executing script: {script_path}")
+            print(f"[PPTX Code] Output path: {output_path}")
+            print(f"[PPTX Code] Working dir: {SERVER_DIR}")
+            print(f"[PPTX Code] Script content preview: {wrapped_code[:800]}...")
+
+            # 执行脚本（在 server 目录下执行，以便找到 node_modules）
+            result = subprocess.run(
+                [node_path, script_path],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=str(SERVER_DIR)
+            )
+
+            # 清理临时文件
+            Path(script_path).unlink(missing_ok=True)
+
+            print(f"[PPTX Code] Return code: {result.returncode}")
+            print(f"[PPTX Code] stdout: {result.stdout[:500] if result.stdout else 'empty'}")
+            print(f"[PPTX Code] stderr: {result.stderr[:500] if result.stderr else 'empty'}")
+
+            # 检查输出文件是否生成
+            if output_path.exists():
+                print(f"[PPTX Code] Success! File created: {output_path}")
+                return {
+                    "path": str(output_path),
+                    "type": "pptx",
+                    "name": output_filename,
+                    "url": f"/outputs/{output_filename}",
+                    "size": output_path.stat().st_size
+                }
+            else:
+                # 查找 outputs 目录下任何新生成的 .pptx 文件
+                for pptx_file in OUTPUTS_DIR.glob("*.pptx"):
+                    if pptx_file.stat().st_mtime > timestamp - 5:  # 5秒内创建的
+                        print(f"[PPTX Code] Found generated file: {pptx_file}")
+                        return {
+                            "path": str(pptx_file),
+                            "type": "pptx",
+                            "name": pptx_file.name,
+                            "url": f"/outputs/{pptx_file.name}",
+                            "size": pptx_file.stat().st_size
+                        }
+
+                print(f"[PPTX Code] Failed: No output file found")
+                print(f"[PPTX Code] stderr: {result.stderr}")
+                return None
+
+        except subprocess.TimeoutExpired:
+            print(f"[PPTX Code] Timeout after {timeout}s")
+            return None
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[PPTX Code] Error: {e}")
+            return None
 
     def _execute_analysis_code(self, code: str, file_paths: list, timeout: int = 120) -> dict:
         """
@@ -1004,7 +1234,28 @@ def save_data(data, name=None, format='csv'):
             }
 
             # 根据格式生成文件（只看 output_format，不再检测内容）
-            if output_format == "html":
+            if output_format == "pptx_code":
+                # 执行 pptxgenjs 代码生成 PPT
+                pptx_result = self._execute_pptx_code(clean_content, skill.name)
+                if pptx_result:
+                    result["_output_file"] = pptx_result
+                    result["content"] = f"PPT 已生成: {pptx_result['name']}"
+                    result["message"] = f"AI 技能「{skill.name}」PPT 生成完成"
+                else:
+                    # 执行失败，保存为 js 文件供调试
+                    filename = generate_unique_filename(skill.name, "js")
+                    filepath = OUTPUTS_DIR / filename
+                    filepath.write_text(clean_content, encoding="utf-8")
+                    result["_output_file"] = {
+                        "path": str(filepath),
+                        "type": "js",
+                        "name": filename,
+                        "url": f"/outputs/{filename}",
+                        "size": filepath.stat().st_size
+                    }
+                    result["content"] = f"PPT 代码执行失败，代码已保存为: {filename}\n\n请确保已安装 pptxgenjs: npm install -g pptxgenjs"
+                    result["message"] = "PPT 代码生成完成（执行失败，已保存为 .js 文件）"
+            elif output_format == "html":
                 result["_html"] = clean_content
             elif output_format == "png_code":
                 # 执行 matplotlib 代码生成图片
@@ -1169,7 +1420,28 @@ def save_data(data, name=None, format='csv'):
             }
 
             # 根据格式生成文件（只看 output_format，不再检测内容）
-            if output_format == "html":
+            if output_format == "pptx_code":
+                # 执行 pptxgenjs 代码生成 PPT
+                pptx_result = self._execute_pptx_code(clean_content, skill.name)
+                if pptx_result:
+                    result["_output_file"] = pptx_result
+                    result["content"] = f"PPT 已生成: {pptx_result['name']}"
+                    result["message"] = f"AI 执行「{skill.name}」PPT 生成完成"
+                else:
+                    # 执行失败，保存为 js 文件供调试
+                    filename = generate_unique_filename(skill.name, "js")
+                    filepath = OUTPUTS_DIR / filename
+                    filepath.write_text(clean_content, encoding="utf-8")
+                    result["_output_file"] = {
+                        "path": str(filepath),
+                        "type": "js",
+                        "name": filename,
+                        "url": f"/outputs/{filename}",
+                        "size": filepath.stat().st_size
+                    }
+                    result["content"] = f"PPT 代码执行失败，代码已保存为: {filename}\n\n请确保已安装 pptxgenjs: npm install -g pptxgenjs"
+                    result["message"] = "PPT 代码生成完成（执行失败，已保存为 .js 文件）"
+            elif output_format == "html":
                 result["_html"] = clean_content
             elif output_format == "png_code":
                 # 执行 matplotlib 代码生成图片
@@ -1405,18 +1677,46 @@ def main(params):
                 contents.append(f"\n[已达到总字符限制，跳过剩余 {len(file_paths) - len(contents)} 个文件]")
                 break
             try:
+                print(f"[_read_files_for_ai] 处理文件路径: {file_path}")
+
                 # URL 路径转换为文件系统路径
+                path = None
                 if file_path.startswith("/uploads/"):
                     filename = file_path[len("/uploads/"):]
                     path = UPLOADS_DIR / filename
+                    print(f"[_read_files_for_ai] 解析为 /uploads/ 格式: {path}")
+                elif file_path.startswith("uploads/"):
+                    filename = file_path[len("uploads/"):]
+                    path = UPLOADS_DIR / filename
+                    print(f"[_read_files_for_ai] 解析为 uploads/ 格式: {path}")
                 elif file_path.startswith("/outputs/"):
                     filename = file_path[len("/outputs/"):]
                     path = OUTPUTS_DIR / filename
+                    print(f"[_read_files_for_ai] 解析为 /outputs/ 格式: {path}")
+                elif file_path.startswith("outputs/"):
+                    filename = file_path[len("outputs/"):]
+                    path = OUTPUTS_DIR / filename
+                    print(f"[_read_files_for_ai] 解析为 outputs/ 格式: {path}")
                 else:
                     path = Path(file_path)
+                    print(f"[_read_files_for_ai] 使用原始路径: {path}")
+                    # 如果不存在，尝试 UPLOADS_DIR 和 OUTPUTS_DIR
+                    if not path.exists():
+                        test_path = UPLOADS_DIR / file_path
+                        print(f"[_read_files_for_ai] 尝试 UPLOADS_DIR: {test_path}")
+                        if test_path.exists():
+                            path = test_path
+                        else:
+                            test_path = OUTPUTS_DIR / file_path
+                            print(f"[_read_files_for_ai] 尝试 OUTPUTS_DIR: {test_path}")
+                            if test_path.exists():
+                                path = test_path
 
-                if not path.exists():
+                if not path or not path.exists():
+                    print(f"[_read_files_for_ai] 跳过不存在的文件: {file_path}, 解析路径: {path}")
                     continue
+
+                print(f"[_read_files_for_ai] 找到文件: {path}")
 
                 suffix = path.suffix.lower()
 
@@ -1853,3 +2153,1843 @@ def main(params):
             import traceback
             traceback.print_exc()
             return False, None, f"AI 执行失败: {str(e)}", None
+
+    # ========== Claude Code 风格：步骤化技能执行 ==========
+
+    async def skill_execute_interactive(
+        self,
+        skill_id: str,
+        context: str,
+        file_paths: List[str] = None,
+        confirmed_step: int = -1,  # 已确认执行到哪一步，-1 表示还没开始
+        auto_confirm: bool = False,  # 自动确认所有步骤
+        skip_current: bool = False  # 跳过当前步骤（不执行 confirmed_step）
+    ) -> AsyncGenerator[str, None]:
+        """
+        Claude Code 风格的交互式技能执行
+
+        不需要 AI 输出 ACTION 标记，而是后端根据技能类型自动规划操作步骤，
+        每个步骤执行前发送确认请求给前端。
+
+        Yields:
+            {"type": "step_planned", "steps": [...]}  - 规划的所有步骤
+            {"type": "step_confirm", "index": 0, "step": {...}}  - 等待确认
+            {"type": "step_executing", "index": 0}  - 正在执行
+            {"type": "step_result", "index": 0, "success": true, "output": "..."}  - 执行结果
+            {"type": "all_done", "output_file": {...}}  - 全部完成
+        """
+        import re
+
+        # 初始化步骤间共享的状态
+        self._last_ai_output = ""
+        self._last_output_file = None
+
+        # 加载技能
+        skill = self.db.query(Skill).filter(Skill.id == skill_id).first()
+        if not skill:
+            yield json.dumps({"type": "error", "message": "技能不存在"})
+            return
+
+        # 读取 SKILL.md 获取 output_format
+        skill_md_content = ""
+        output_format = "text"  # 默认
+        if skill.folder_path:
+            skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
+            skill_md_path = skill_folder / "SKILL.md"
+            if skill_md_path.exists():
+                try:
+                    skill_md_content = skill_md_path.read_text(encoding="utf-8")
+                    # 解析 frontmatter 获取 output_format
+                    fm_match = re.match(r'^---\s*\n(.*?)\n---', skill_md_content, re.DOTALL)
+                    if fm_match:
+                        import yaml
+                        try:
+                            fm = yaml.safe_load(fm_match.group(1))
+                            output_format = fm.get('output_format', 'text')
+                        except:
+                            pass
+                except Exception:
+                    pass
+
+        # ========== 简化版：一次性执行所有步骤，流式返回进度 ==========
+        import asyncio
+
+        # 步骤1: AI 生成
+        yield json.dumps({
+            "type": "step_start",
+            "step": "generate",
+            "message": f"● **Generate({skill.name})**\n  ⎿  AI 正在生成代码..."
+        })
+        await asyncio.sleep(0)  # 确保事件被发送
+
+        gen_result = await self._step_generate_ai_content(skill, context, file_paths)
+
+        if not gen_result.get("success"):
+            yield json.dumps({
+                "type": "step_error",
+                "step": "generate",
+                "message": f"● **Generate({skill.name})** ❌\n  ⎿  {gen_result.get('output', 'AI 生成失败')}"
+            })
+            return
+
+        yield json.dumps({
+            "type": "step_done",
+            "step": "generate",
+            "message": f"● **Generate({skill.name})**\n  ⎿  代码生成完成"
+        })
+
+        # 规划后续步骤
+        steps = self._plan_execution_steps(skill, output_format, context, file_paths)
+
+        # 执行每个步骤
+        for i, step in enumerate(steps):
+            step_name = step.get("name", f"Step {i+1}")
+
+            # 显示步骤开始
+            yield json.dumps({
+                "type": "step_start",
+                "index": i,
+                "step": step,
+                "message": f"● **{step_name}**\n  ⎿  执行中..."
+            })
+            await asyncio.sleep(0)  # 确保事件被发送
+
+            # 执行步骤
+            result = await self._execute_step(step, skill, context, file_paths)
+
+            if result.get("success"):
+                yield json.dumps({
+                    "type": "step_done",
+                    "index": i,
+                    "step": step,
+                    "message": f"● **{step_name}**\n  ⎿  {result.get('output', '完成')}",
+                    "output_file": result.get("output_file")
+                })
+            else:
+                yield json.dumps({
+                    "type": "step_error",
+                    "index": i,
+                    "step": step,
+                    "message": f"● **{step_name}** ❌\n  ⎿  {result.get('output', '失败')}"
+                })
+                return
+
+        # 全部完成
+        yield json.dumps({"type": "all_done"})
+
+    def _plan_execution_steps(
+        self,
+        skill,
+        output_format: str,
+        context: str,
+        file_paths: List[str] = None
+    ) -> List[Dict]:
+        """
+        根据技能类型规划执行步骤 - Claude Code 风格
+
+        注意：Generate 步骤是自动执行的，不需要用户确认。
+        用户只需要确认 Write 和 Bash 操作。
+        """
+        import hashlib
+        # 使用 context 的 hash 生成稳定的文件名（跨请求一致）
+        context_hash = hashlib.md5(context.encode()).hexdigest()[:8]
+        steps = []
+
+        # 根据 output_format 添加步骤（不包含 generate，generate 会自动执行）
+        if output_format == "pptx_code":
+            filename = f"{skill.name}-{context_hash}.js"
+            steps.append({
+                "type": "write",
+                "name": f"Write({filename})",
+                "description": "将生成的 pptxgenjs 代码保存为文件",
+                "filename": filename
+            })
+            steps.append({
+                "type": "run",
+                "name": f"Bash(node {filename})",
+                "description": f"执行脚本生成 PPT",
+                "command": f"node {filename}",
+                "filename": filename
+            })
+        elif output_format == "html":
+            filename = f"{skill.name}-{context_hash}.html"
+            steps.append({
+                "type": "write",
+                "name": f"Write({filename})",
+                "description": "将生成的 HTML 保存到文件",
+                "filename": filename
+            })
+        elif output_format in ("analysis_code", "png_code", "img_code"):
+            filename = f"{skill.name}-{context_hash}.py"
+            steps.append({
+                "type": "write",
+                "name": f"Write({filename})",
+                "description": "将生成的 Python 代码保存为文件",
+                "filename": filename
+            })
+            steps.append({
+                "type": "run",
+                "name": f"Bash(python {filename})",
+                "description": f"执行脚本生成输出",
+                "command": f"python {filename}",
+                "filename": filename
+            })
+        else:
+            # 默认：只保存文件
+            filename = f"{skill.name}-{context_hash}.md"
+            steps.append({
+                "type": "write",
+                "name": f"Write({filename})",
+                "description": "将生成的内容保存为文件",
+                "filename": filename
+            })
+
+        return steps
+
+    async def _execute_step(
+        self,
+        step: Dict,
+        skill,
+        context: str,
+        file_paths: List[str] = None
+    ) -> Dict:
+        """
+        执行单个步骤 - Claude Code 风格的分步执行
+
+        Write/Bash 步骤需要用户确认后执行
+        """
+        step_type = step.get("type")
+        filename = step.get("filename")  # 从 step 信息获取文件名
+
+        try:
+            if step_type == "write":
+                # 写入文件
+                return await self._step_write_file(skill, filename)
+
+            elif step_type == "run":
+                # 执行命令
+                return await self._step_run_command(skill, filename)
+
+            else:
+                return {"success": False, "output": f"未知步骤类型: {step_type}"}
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "output": str(e)}
+
+    async def _step_generate_ai_content(
+        self,
+        skill,
+        context: str,
+        file_paths: List[str] = None
+    ) -> Dict:
+        """步骤1: 调用 AI 生成代码（不执行）"""
+        import re
+
+        skill_folder = SKILLS_STORAGE_DIR / skill.folder_path if skill.folder_path else None
+        if not skill_folder or not skill_folder.exists():
+            return {"success": False, "output": "技能文件夹不存在"}
+
+        skill_md_path = skill_folder / "SKILL.md"
+        if not skill_md_path.exists():
+            return {"success": False, "output": "SKILL.md 不存在"}
+
+        try:
+            skill_md_content = skill_md_path.read_text(encoding="utf-8")
+
+            # 读取 reference 目录
+            reference_content = ""
+            reference_dir = skill_folder / "reference"
+            if reference_dir.exists():
+                for ref_file in reference_dir.glob("*.md"):
+                    try:
+                        ref_text = ref_file.read_text(encoding="utf-8")
+                        if len(ref_text) > 5000:
+                            ref_text = ref_text[:5000] + "\n...[truncated]..."
+                        reference_content += f"\n\n## Reference: {ref_file.name}\n{ref_text}"
+                    except:
+                        pass
+
+            # 读取上传的文件
+            file_content = ""
+            if file_paths:
+                file_content = self._read_files_for_ai(file_paths)
+
+            # System prompt
+            system_prompt = f"""{skill_md_content[:12000]}
+{reference_content[:4000] if reference_content else ""}
+"""
+
+            # 用户消息
+            user_message = context or "请根据技能说明执行默认任务"
+            message_content = self._build_multimodal_content(user_message, file_content)
+
+            # 调用 Claude API（使用线程池避免阻塞事件循环）
+            import asyncio
+            log_ai_start()
+
+            def call_claude():
+                return self.client.messages.create(
+                    model=self.model,
+                    max_tokens=16000,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": message_content}]
+                )
+
+            response = await asyncio.to_thread(call_claude)
+            log_ai_done()
+
+            ai_output = response.content[0].text
+
+            # 解析输出格式
+            output_format, clean_content = self._parse_output_format(ai_output)
+
+            # 保存到实例变量，供后续步骤使用
+            self._generated_code = clean_content
+            self._generated_output_format = output_format
+            self._generated_file_path = None
+            self._last_output_file = None
+
+            # 返回生成的代码预览
+            code_preview = clean_content[:500] + "..." if len(clean_content) > 500 else clean_content
+            return {
+                "success": True,
+                "output": f"AI 已生成 {output_format} 代码\n\n```\n{code_preview}\n```"
+            }
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "output": f"AI 生成失败: {str(e)}"}
+
+    async def _step_write_file(self, skill, filename: str = None) -> Dict:
+        """Write 步骤: 将生成的代码写入文件"""
+
+        if not hasattr(self, '_generated_code') or not self._generated_code:
+            return {"success": False, "output": "没有生成的代码可写入"}
+
+        output_format = getattr(self, '_generated_output_format', 'text')
+        code = self._generated_code
+
+        try:
+            # 使用传入的文件名或生成默认文件名
+            if not filename:
+                import time
+                timestamp = int(time.time())
+                if output_format == "pptx_code":
+                    filename = f"{skill.name}-{timestamp}.js"
+                elif output_format in ("png_code", "analysis_code", "img_code"):
+                    filename = f"{skill.name}-{timestamp}.py"
+                elif output_format == "html":
+                    filename = f"{skill.name}-{timestamp}.html"
+                else:
+                    filename = f"{skill.name}-{timestamp}.md"
+
+            filepath = OUTPUTS_DIR / filename
+
+            # 清理代码中的 markdown 代码块标记
+            clean_code = code.strip()
+            if clean_code.startswith('```javascript'):
+                clean_code = clean_code[len('```javascript'):].strip()
+            elif clean_code.startswith('```js'):
+                clean_code = clean_code[len('```js'):].strip()
+            elif clean_code.startswith('```python'):
+                clean_code = clean_code[len('```python'):].strip()
+            elif clean_code.startswith('```html'):
+                clean_code = clean_code[len('```html'):].strip()
+            elif clean_code.startswith('```'):
+                clean_code = clean_code[3:].strip()
+            if clean_code.endswith('```'):
+                clean_code = clean_code[:-3].strip()
+
+            # 写入文件
+            filepath.write_text(clean_code, encoding="utf-8")
+            self._generated_file_path = filepath
+            self._generated_filename = filename
+
+            # 确定文件类型
+            if filename.endswith('.js'):
+                self._generated_file_type = "js"
+            elif filename.endswith('.py'):
+                self._generated_file_type = "py"
+            elif filename.endswith('.html'):
+                self._generated_file_type = "html"
+                # HTML 文件直接作为输出
+                self._last_output_file = {
+                    "path": str(filepath),
+                    "type": "html",
+                    "name": filename,
+                    "url": f"/outputs/{filename}",
+                    "size": filepath.stat().st_size
+                }
+            else:
+                self._generated_file_type = "md"
+                self._last_output_file = {
+                    "path": str(filepath),
+                    "type": "markdown",
+                    "name": filename,
+                    "url": f"/outputs/{filename}",
+                    "size": filepath.stat().st_size
+                }
+
+            return {
+                "success": True,
+                "output": f"文件已保存"
+            }
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "output": f"写入文件失败: {str(e)}"}
+
+    async def _step_run_command(self, skill, filename: str = None) -> Dict:
+        """Bash 步骤: 执行命令生成最终输出"""
+        import re
+        import subprocess
+        import shutil
+        import time
+        import tempfile
+
+        if not hasattr(self, '_generated_file_path') or not self._generated_file_path:
+            return {"success": False, "output": "没有文件可执行"}
+
+        filepath = self._generated_file_path
+        file_type = getattr(self, '_generated_file_type', '')
+        output_format = getattr(self, '_generated_output_format', 'text')
+        input_filename = getattr(self, '_generated_filename', filename or 'script')
+
+        try:
+            if output_format == "pptx_code" and file_type == "js":
+                # 执行 Node.js 脚本生成 PPT
+                node_path = shutil.which('node')
+                if not node_path:
+                    return {"success": False, "output": "Node.js 未安装"}
+
+                # 检查 pptxgenjs
+                node_modules_path = SERVER_DIR / "node_modules" / "pptxgenjs"
+                if not node_modules_path.exists():
+                    npm_path = shutil.which('npm')
+                    if npm_path:
+                        import asyncio
+                        def run_npm_install():
+                            return subprocess.run(
+                                [npm_path, "install", "pptxgenjs"],
+                                capture_output=True,
+                                text=True,
+                                timeout=120,
+                                cwd=str(SERVER_DIR)
+                            )
+                        install_result = await asyncio.to_thread(run_npm_install)
+                        if install_result.returncode != 0:
+                            return {"success": False, "output": f"安装 pptxgenjs 失败: {install_result.stderr}"}
+
+                # 修改代码中的输出路径
+                timestamp = int(time.time())
+                output_filename = f"{skill.name}_{timestamp}.pptx"
+                output_path = OUTPUTS_DIR / output_filename
+                output_path_str = str(output_path).replace('\\', '/')
+
+                code = filepath.read_text(encoding="utf-8")
+
+                # 替换 writeFile 路径
+                code = re.sub(
+                    r'writeFile\s*\(\s*\{[^}]*fileName\s*:\s*["\'][^"\']*["\']',
+                    f'writeFile({{ fileName: "{output_path_str}"',
+                    code
+                )
+                code = re.sub(
+                    r'writeFile\s*\(\s*["\'][^"\']+\.pptx["\']',
+                    f'writeFile("{output_path_str}"',
+                    code
+                )
+                if 'writeFile' not in code:
+                    code += f'\npres.writeFile({{ fileName: "{output_path_str}" }});'
+
+                # 包装成可执行的脚本
+                if 'require(' not in code:
+                    code = f'const pptxgen = require("pptxgenjs");\n\n{code}'
+
+                # 写入临时文件并执行
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.js', delete=False, encoding='utf-8') as f:
+                    # 包装为 async
+                    if 'async' not in code:
+                        code = re.sub(r'(pres\.writeFile\([^)]+\))', r'await \1', code)
+                        wrapped_code = f'''
+const pptxgen = require("pptxgenjs");
+
+(async () => {{
+{code}
+}})().catch(err => {{
+    console.error("Error:", err);
+    process.exit(1);
+}});
+'''
+                    else:
+                        wrapped_code = code
+
+                    f.write(wrapped_code)
+                    temp_script = f.name
+
+                # 执行脚本（使用 asyncio.to_thread 避免阻塞事件循环）
+                import asyncio
+                def run_node():
+                    return subprocess.run(
+                        [node_path, temp_script],
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        cwd=str(SERVER_DIR),
+                        env={**os.environ, "NODE_PATH": str(SERVER_DIR / "node_modules")}
+                    )
+                result = await asyncio.to_thread(run_node)
+
+                # 清理临时文件
+                try:
+                    os.unlink(temp_script)
+                except:
+                    pass
+
+                if result.returncode != 0:
+                    return {"success": False, "output": f"执行失败: {result.stderr or result.stdout}"}
+
+                # 检查输出文件
+                if output_path.exists():
+                    self._last_output_file = {
+                        "path": str(output_path),
+                        "type": "ppt",
+                        "name": output_filename,
+                        "url": f"/outputs/{output_filename}",
+                        "size": output_path.stat().st_size
+                    }
+                    return {
+                        "success": True,
+                        "output": f"PPT已生成: {output_filename}",
+                        "output_file": self._last_output_file
+                    }
+                else:
+                    return {"success": False, "output": "PPT 文件未生成，请检查代码"}
+
+            elif output_format == "png_code" and file_type == "py":
+                # 执行 Python 脚本生成图片
+                python_path = shutil.which('python') or shutil.which('python3')
+                if not python_path:
+                    return {"success": False, "output": "Python 未安装"}
+
+                timestamp = int(time.time())
+                output_filename = f"{skill.name}_{timestamp}.png"
+                output_path = OUTPUTS_DIR / output_filename
+
+                # 修改代码中的保存路径
+                code = filepath.read_text(encoding="utf-8")
+                code = re.sub(
+                    r"savefig\s*\(['\"]([^'\"]+)['\"]\)",
+                    f"savefig(r'{output_path}')",
+                    code
+                )
+                if 'savefig' not in code:
+                    code += f"\nplt.savefig(r'{output_path}')"
+
+                # 写入临时文件并执行
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+                    f.write(code)
+                    temp_script = f.name
+
+                # 使用 asyncio.to_thread 避免阻塞事件循环
+                import asyncio
+                def run_python():
+                    return subprocess.run(
+                        [python_path, temp_script],
+                        capture_output=True,
+                        text=True,
+                        timeout=120
+                    )
+                result = await asyncio.to_thread(run_python)
+
+                try:
+                    os.unlink(temp_script)
+                except:
+                    pass
+
+                if result.returncode != 0:
+                    return {"success": False, "output": f"执行失败: {result.stderr or result.stdout}"}
+
+                if output_path.exists():
+                    self._last_output_file = {
+                        "path": str(output_path),
+                        "type": "png",
+                        "name": output_filename,
+                        "url": f"/outputs/{output_filename}",
+                        "size": output_path.stat().st_size
+                    }
+                    return {
+                        "success": True,
+                        "output": f"图片已生成: {output_filename}",
+                        "output_file": self._last_output_file
+                    }
+                else:
+                    return {"success": False, "output": "图片文件未生成，请检查代码"}
+
+            else:
+                # 其他类型，文件已在 write 步骤保存
+                if self._last_output_file:
+                    return {
+                        "success": True,
+                        "output": f"文件已就绪: {self._last_output_file.get('name', '')}",
+                        "output_file": self._last_output_file
+                    }
+                return {"success": True, "output": "执行完成"}
+
+        except subprocess.TimeoutExpired:
+            return {"success": False, "output": "执行超时"}
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "output": f"执行失败: {str(e)}"}
+
+    async def skill_chat_stream(
+        self,
+        skill_id: str,
+        context: str,
+        conversation: List[Dict[str, str]] = None,
+        file_paths: List[str] = None,
+        user_choice: str = None,
+        pending_actions: List[Dict] = None,
+        current_action_index: int = 0
+    ) -> AsyncGenerator[str, None]:
+        """
+        Claude Code 风格的交互式技能执行
+
+        AI 会输出操作步骤，每个步骤需要用户确认后才执行：
+        - <!--ACTION:write--> 写入文件
+        - <!--ACTION:run--> 执行命令
+        - <!--ACTION:generate--> 生成内容
+
+        Args:
+            skill_id: 技能 UUID
+            context: 用户原始需求
+            conversation: 右侧面板对话历史
+            file_paths: 文件路径列表
+            user_choice: 用户选择（execute/skip/edit）
+            pending_actions: 待执行的操作列表
+            current_action_index: 当前操作索引
+
+        Yields:
+            SSE 格式的流式响应
+        """
+        import re
+
+        # 加载技能
+        skill = self.db.query(Skill).filter(Skill.id == skill_id).first()
+        if not skill:
+            yield json.dumps({"type": "error", "message": "技能不存在"})
+            return
+
+        # 如果有待执行的操作且用户选择了执行
+        if pending_actions and user_choice == "execute" and current_action_index < len(pending_actions):
+            action = pending_actions[current_action_index]
+            yield json.dumps({
+                "type": "action_executing",
+                "index": current_action_index,
+                "action": action
+            })
+
+            # 执行操作
+            result = await self._execute_action(action, skill.name, file_paths)
+
+            yield json.dumps({
+                "type": "action_result",
+                "index": current_action_index,
+                "success": result.get("success", False),
+                "output": result.get("output", ""),
+                "output_file": result.get("output_file")
+            })
+
+            # 如果还有下一个操作
+            if current_action_index + 1 < len(pending_actions):
+                next_action = pending_actions[current_action_index + 1]
+                yield json.dumps({
+                    "type": "action_pending",
+                    "index": current_action_index + 1,
+                    "action": next_action,
+                    "total": len(pending_actions)
+                })
+            else:
+                yield json.dumps({"type": "all_actions_done"})
+
+            return
+
+        # 如果用户选择跳过
+        if pending_actions and user_choice == "skip" and current_action_index < len(pending_actions):
+            yield json.dumps({
+                "type": "action_skipped",
+                "index": current_action_index
+            })
+
+            # 如果还有下一个操作
+            if current_action_index + 1 < len(pending_actions):
+                next_action = pending_actions[current_action_index + 1]
+                yield json.dumps({
+                    "type": "action_pending",
+                    "index": current_action_index + 1,
+                    "action": next_action,
+                    "total": len(pending_actions)
+                })
+            else:
+                yield json.dumps({"type": "all_actions_done"})
+
+            return
+
+        # 读取 SKILL.md 内容
+        skill_md_content = ""
+        if skill.folder_path:
+            skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
+            skill_md_path = skill_folder / "SKILL.md"
+            if skill_md_path.exists():
+                try:
+                    skill_md_content = skill_md_path.read_text(encoding="utf-8")
+                except Exception:
+                    pass
+
+        # 读取文件内容（如果有）
+        file_content = ""
+        if file_paths:
+            file_content = self._read_files_for_ai(file_paths)
+
+        # 构建 system prompt - Claude Code 风格
+        # 重要：将执行规则放在最前面，让 AI 优先注意到
+        system_prompt = f"""# 最重要的规则 - 必须遵守
+
+你正在一个交互式执行环境中工作。你必须使用 ACTION 标记来定义每个操作步骤，让用户逐个确认后执行。
+
+## 操作标记格式（必须使用）
+
+### 写入文件
+<!--ACTION:write-->
+{{"file": "文件名.js", "content": "完整文件内容..."}}
+<!--END_ACTION-->
+
+### 执行命令
+<!--ACTION:run-->
+{{"command": "node script.js", "description": "描述这个命令做什么"}}
+<!--END_ACTION-->
+
+### 生成内容
+<!--ACTION:generate-->
+{{"type": "pptx_code", "content": "完整的 pptxgenjs 代码..."}}
+<!--END_ACTION-->
+
+## 示例输出
+
+当用户说"帮我生成一个 PPT"时，你应该这样输出：
+
+好的！我来帮你生成 PPT。我将执行以下步骤：
+
+**步骤 1: 创建 PPT 生成脚本**
+<!--ACTION:write-->
+{{"file": "presentation.js", "content": "const pptxgen = require('pptxgenjs');\\nconst pres = new pptxgen();\\npres.defineLayout({{ name:'LAYOUT', width:10, height:5.625 }});\\n// 添加幻灯片...\\npres.writeFile({{ fileName: '演示文稿.pptx' }});"}}
+<!--END_ACTION-->
+
+**步骤 2: 执行脚本生成 PPT 文件**
+<!--ACTION:run-->
+{{"command": "node presentation.js", "description": "运行脚本生成 演示文稿.pptx"}}
+<!--END_ACTION-->
+
+---
+
+## 技能说明（参考信息）
+
+{skill_md_content[:6000] if skill_md_content else skill.description or "通用技能"}
+
+---
+
+## 重要提醒
+
+- **必须使用 ACTION 标记**来定义每个操作
+- 每个 ACTION 内的 JSON 必须是有效格式
+- 用户会看到每个操作并选择：执行、跳过或取消
+- 代码内容必须完整，不能省略"""
+
+        # 构建消息列表
+        messages = []
+
+        # 添加初始上下文
+        initial_message = context
+        if file_content:
+            initial_message += f"\n\n## 用户上传的文件内容\n{file_content[:20000]}"
+
+        # 如果有对话历史，使用历史；否则用初始消息
+        if conversation and len(conversation) > 0:
+            for msg in conversation:
+                messages.append({"role": msg["role"], "content": msg["content"]})
+        else:
+            messages.append({"role": "user", "content": initial_message})
+
+        try:
+            # 流式调用 Claude API
+            with self.client.messages.stream(
+                model=self.model,
+                max_tokens=16000,
+                system=system_prompt,
+                messages=messages
+            ) as stream:
+                full_response = ""
+                for text in stream.text_stream:
+                    full_response += text
+                    yield json.dumps({"type": "content", "text": text})
+
+                # 解析所有 ACTION 标记
+                action_pattern = r'<!--ACTION:(\w+)-->\s*(\{.*?\})\s*<!--END_ACTION-->'
+                actions = []
+                for match in re.finditer(action_pattern, full_response, re.DOTALL):
+                    action_type = match.group(1)
+                    try:
+                        action_data = json.loads(match.group(2))
+                        actions.append({
+                            "type": action_type,
+                            "data": action_data
+                        })
+                    except json.JSONDecodeError:
+                        pass
+
+                if actions:
+                    # 发送所有操作列表
+                    yield json.dumps({
+                        "type": "actions_planned",
+                        "actions": actions,
+                        "total": len(actions)
+                    })
+
+                    # 发送第一个待确认的操作
+                    yield json.dumps({
+                        "type": "action_pending",
+                        "index": 0,
+                        "action": actions[0],
+                        "total": len(actions)
+                    })
+                else:
+                    # 没有操作，直接完成
+                    yield json.dumps({"type": "done", "full_response": full_response})
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield json.dumps({"type": "error", "message": str(e)})
+
+    async def _execute_action(
+        self,
+        action: Dict,
+        skill_name: str,
+        file_paths: List[str] = None
+    ) -> Dict:
+        """
+        执行单个操作
+
+        Args:
+            action: {"type": "write/run/generate", "data": {...}}
+            skill_name: 技能名称
+            file_paths: 文件路径列表
+
+        Returns:
+            {"success": bool, "output": str, "output_file": dict|None}
+        """
+        action_type = action.get("type")
+        data = action.get("data", {})
+
+        try:
+            if action_type == "write":
+                # 写入文件
+                filename = data.get("file", "output.txt")
+                content = data.get("content", "")
+                filepath = OUTPUTS_DIR / filename
+                filepath.write_text(content, encoding="utf-8")
+                return {
+                    "success": True,
+                    "output": f"文件已写入: {filename}",
+                    "output_file": {
+                        "path": str(filepath),
+                        "type": filepath.suffix.lstrip(".") or "txt",
+                        "name": filename,
+                        "url": f"/outputs/{filename}",
+                        "size": filepath.stat().st_size
+                    }
+                }
+
+            elif action_type == "run":
+                # 执行命令
+                import subprocess
+                command = data.get("command", "")
+                if not command:
+                    return {"success": False, "output": "命令为空"}
+
+                # 安全检查
+                dangerous = ["rm -rf", "del /f", "format", "mkfs", "> /dev/"]
+                for d in dangerous:
+                    if d in command.lower():
+                        return {"success": False, "output": f"不允许执行危险命令: {command}"}
+
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    cwd=str(OUTPUTS_DIR)
+                )
+
+                output = result.stdout or result.stderr or "(无输出)"
+
+                # 检查是否生成了文件
+                output_file = None
+                # 尝试从命令中提取可能的输出文件名
+                import re
+                pptx_match = re.search(r'([^\s"]+\.pptx)', command)
+                if pptx_match:
+                    pptx_name = pptx_match.group(1)
+                    pptx_path = OUTPUTS_DIR / pptx_name
+                    if pptx_path.exists():
+                        output_file = {
+                            "path": str(pptx_path),
+                            "type": "pptx",
+                            "name": pptx_name,
+                            "url": f"/outputs/{pptx_name}",
+                            "size": pptx_path.stat().st_size
+                        }
+
+                return {
+                    "success": result.returncode == 0,
+                    "output": output,
+                    "output_file": output_file
+                }
+
+            elif action_type == "generate":
+                # 生成内容
+                gen_type = data.get("type", "")
+                content = data.get("content", "")
+
+                if gen_type == "pptx_code":
+                    result = self._execute_pptx_code(content, skill_name)
+                    if result:
+                        return {
+                            "success": True,
+                            "output": f"PPT 已生成: {result['name']}",
+                            "output_file": result
+                        }
+                    else:
+                        return {"success": False, "output": "PPT 生成失败"}
+
+                elif gen_type == "html":
+                    from services.file_generator import generate_unique_filename
+                    filename = generate_unique_filename(skill_name, "html")
+                    filepath = OUTPUTS_DIR / filename
+                    filepath.write_text(content, encoding="utf-8")
+                    return {
+                        "success": True,
+                        "output": f"HTML 已生成: {filename}",
+                        "output_file": {
+                            "path": str(filepath),
+                            "type": "html",
+                            "name": filename,
+                            "url": f"/outputs/{filename}",
+                            "size": filepath.stat().st_size
+                        }
+                    }
+
+                return {"success": False, "output": f"未知生成类型: {gen_type}"}
+
+            else:
+                return {"success": False, "output": f"未知操作类型: {action_type}"}
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "output": f"执行失败: {str(e)}"}
+
+    # ========== 真正的 Claude Code 风格：多轮 AI 交互循环 ==========
+
+    def _get_agent_tools(self) -> List[Dict]:
+        """定义 Agent 可用的工具"""
+        return [
+            {
+                "name": "write",
+                "description": "将内容写入文件。用于创建新文件或覆盖现有文件。",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "文件路径（相对于 outputs 目录）"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "要写入的文件内容"
+                        }
+                    },
+                    "required": ["path", "content"]
+                }
+            },
+            {
+                "name": "bash",
+                "description": "执行 bash/shell 命令。可以运行 node、python 等脚本。",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "要执行的命令"
+                        }
+                    },
+                    "required": ["command"]
+                }
+            },
+            {
+                "name": "read",
+                "description": "读取文件内容。",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "文件路径"
+                        }
+                    },
+                    "required": ["path"]
+                }
+            }
+        ]
+
+    async def _execute_tool(self, tool_name: str, params: Dict) -> Dict:
+        """执行工具并返回结果"""
+        import subprocess
+        import shutil
+        import asyncio
+        import time
+
+        try:
+            print(f"[_execute_tool] 执行工具: {tool_name}, 参数: {str(params)[:200]}")
+
+            if tool_name == "write":
+                # 写入文件
+                path = params.get("path", "")
+                content = params.get("content", "")
+
+                print(f"[_execute_tool] write: path={path}, content长度={len(content)}")
+
+                # 确保路径安全
+                if ".." in path or path.startswith("/"):
+                    print(f"[_execute_tool] write: 路径不安全")
+                    return {"success": False, "output": "不允许的路径"}
+
+                filepath = OUTPUTS_DIR / path
+                print(f"[_execute_tool] write: 完整路径={filepath}")
+                filepath.parent.mkdir(parents=True, exist_ok=True)
+
+                # 清理 markdown 代码块标记
+                clean_content = content.strip()
+                for prefix in ['```javascript', '```js', '```python', '```html', '```']:
+                    if clean_content.startswith(prefix):
+                        clean_content = clean_content[len(prefix):].strip()
+                        break
+                if clean_content.endswith('```'):
+                    clean_content = clean_content[:-3].strip()
+
+                # 修复中文引号（常见的 AI 生成错误）
+                clean_content = clean_content.replace('"', '"').replace('"', '"')
+                clean_content = clean_content.replace(''', "'").replace(''', "'")
+
+                filepath.write_text(clean_content, encoding="utf-8")
+                print(f"[_execute_tool] write: 文件已写入, 大小={filepath.stat().st_size}")
+
+                return {
+                    "success": True,
+                    "output": f"文件已写入: {path}",
+                    "file_path": str(filepath)
+                }
+
+            elif tool_name == "bash":
+                # 执行命令
+                command = params.get("command", "")
+                print(f"[_execute_tool] bash: command={command}")
+
+                # 安全检查
+                dangerous = ["rm -rf", "rmdir", "del /", "format", "mkfs"]
+                for d in dangerous:
+                    if d in command.lower():
+                        return {"success": False, "output": f"不允许执行危险命令"}
+
+                # 在 outputs 目录执行
+                cwd = str(OUTPUTS_DIR)
+                print(f"[_execute_tool] bash: cwd={cwd}")
+
+                # 检查是否是 node 命令
+                if command.strip().startswith("node "):
+                    node_path = shutil.which('node')
+                    if not node_path:
+                        return {"success": False, "output": "Node.js 未安装"}
+
+                    # 检查并安装必要的 npm 包
+                    npm_path = shutil.which('npm')
+                    packages_to_install = []
+
+                    # 检查 pptxgenjs (PPT 生成)
+                    if not (SERVER_DIR / "node_modules" / "pptxgenjs").exists():
+                        packages_to_install.append("pptxgenjs")
+
+                    # 检查 exceljs (Excel 生成)
+                    if not (SERVER_DIR / "node_modules" / "exceljs").exists():
+                        packages_to_install.append("exceljs")
+
+                    if packages_to_install and npm_path:
+                        def install_npm():
+                            return subprocess.run(
+                                [npm_path, "install"] + packages_to_install,
+                                capture_output=True,
+                                text=True,
+                                timeout=120,
+                                cwd=str(SERVER_DIR)
+                            )
+                        await asyncio.to_thread(install_npm)
+
+                    # 修复 JS 文件中的输出路径
+                    script_name = command.strip().split()[1]  # node xxx.js
+                    script_path = OUTPUTS_DIR / script_name
+                    if script_path.exists():
+                        import re
+                        script_content = script_path.read_text(encoding="utf-8")
+                        outputs_path_str = str(OUTPUTS_DIR).replace('\\', '/')
+
+                        # 替换 writeFile 中的相对路径为绝对路径
+                        # 支持 PPT (.pptx) 和 Excel (.xlsx) 文件
+                        def fix_path(match):
+                            filename = match.group(1)
+                            # 如果已经是绝对路径，不修改
+                            if '/' in filename or '\\' in filename:
+                                return match.group(0)
+                            return match.group(0).replace(filename, f"{outputs_path_str}/{filename}")
+
+                        # 修复 PPT 文件路径
+                        script_content = re.sub(
+                            r'writeFile\s*\(\s*["\']([^"\']+\.pptx)["\']',
+                            fix_path,
+                            script_content
+                        )
+                        script_content = re.sub(
+                            r'fileName\s*:\s*["\']([^"\']+\.pptx)["\']',
+                            fix_path,
+                            script_content
+                        )
+
+                        # 修复 Excel 文件路径
+                        script_content = re.sub(
+                            r'writeFile\s*\(\s*["\']([^"\']+\.xlsx)["\']',
+                            fix_path,
+                            script_content
+                        )
+                        script_content = re.sub(
+                            r'xlsx\.writeFile\s*\(\s*["\']([^"\']+\.xlsx)["\']',
+                            fix_path,
+                            script_content
+                        )
+
+                        script_path.write_text(script_content, encoding="utf-8")
+
+                    # 设置 NODE_PATH
+                    env = {**os.environ, "NODE_PATH": str(SERVER_DIR / "node_modules")}
+
+                # 检查是否是 python 命令
+                elif command.strip().startswith("python "):
+                    # 修复 Python 脚本中的输出路径
+                    parts = command.strip().split()
+                    if len(parts) >= 2:
+                        script_name = parts[1]
+                        script_path = OUTPUTS_DIR / script_name
+                        if script_path.exists() and script_path.suffix == '.py':
+                            import re
+                            script_content = script_path.read_text(encoding="utf-8")
+                            outputs_path_str = str(OUTPUTS_DIR).replace('\\', '/')
+
+                            # 在脚本开头添加 OUTPUT_DIR 变量
+                            if 'OUTPUT_DIR' not in script_content:
+                                script_content = f'OUTPUT_DIR = r"{outputs_path_str}"\n' + script_content
+
+                            # 修复常见的输出路径模式
+                            def fix_python_path(match):
+                                filename = match.group(1)
+                                if '/' in filename or '\\' in filename or filename.startswith('OUTPUT_DIR'):
+                                    return match.group(0)
+                                return match.group(0).replace(f'"{filename}"', f'f"{{OUTPUT_DIR}}/{filename}"')
+
+                            # to_excel, to_csv, to_json 等
+                            for method in ['to_excel', 'to_csv', 'to_json', 'to_html', 'savefig', 'write']:
+                                script_content = re.sub(
+                                    rf'{method}\s*\(\s*["\']([^"\']+)["\']',
+                                    fix_python_path,
+                                    script_content
+                                )
+
+                            # open() 写文件
+                            script_content = re.sub(
+                                r'open\s*\(\s*["\']([^"\']+)["\'].*["\']w',
+                                fix_python_path,
+                                script_content
+                            )
+
+                            script_path.write_text(script_content, encoding="utf-8")
+                            print(f"[_execute_tool] 修复 Python 脚本路径: {script_name}")
+
+                    env = os.environ
+                else:
+                    env = os.environ
+
+                # 执行命令
+                def run_cmd():
+                    return subprocess.run(
+                        command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        cwd=cwd,
+                        env=env
+                    )
+
+                result = await asyncio.to_thread(run_cmd)
+                print(f"[_execute_tool] bash: returncode={result.returncode}")
+                print(f"[_execute_tool] bash: stdout={result.stdout[:500] if result.stdout else 'None'}")
+                print(f"[_execute_tool] bash: stderr={result.stderr[:500] if result.stderr else 'None'}")
+
+                if result.returncode == 0:
+                    output = result.stdout or "执行成功"
+                    # 检查是否生成了文件（支持更多格式）
+                    output_file = None
+                    supported_extensions = [
+                        # Office 文件
+                        '.pptx', '.ppt', '.xlsx', '.xls', '.docx', '.doc',
+                        # 数据文件
+                        '.csv', '.json',
+                        # 文档
+                        '.pdf', '.html', '.md', '.txt',
+                        # 图片
+                        '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'
+                    ]
+
+                    print(f"[_execute_tool] 检查输出目录: {OUTPUTS_DIR}")
+                    print(f"[_execute_tool] 目录内容: {list(OUTPUTS_DIR.iterdir()) if OUTPUTS_DIR.exists() else '目录不存在'}")
+
+                    current_time = time.time()
+                    for ext in supported_extensions:
+                        # 使用 ** 递归搜索子目录
+                        for f in OUTPUTS_DIR.glob(f"**/*{ext}"):
+                            file_mtime = f.stat().st_mtime
+                            time_diff = current_time - file_mtime
+                            print(f"[_execute_tool] 发现文件: {f}, 修改时间差: {time_diff:.1f}秒")
+                            if time_diff < 30:  # 30秒内创建的
+                                # 根据扩展名确定文件类型
+                                file_type = ext[1:]
+                                if ext in ['.xlsx', '.xls']:
+                                    file_type = 'excel'
+                                elif ext in ['.pptx', '.ppt']:
+                                    file_type = 'ppt'
+                                elif ext in ['.docx', '.doc']:
+                                    file_type = 'word'
+                                elif ext in ['.jpg', '.jpeg', '.gif', '.svg', '.webp']:
+                                    file_type = 'image'
+
+                                # 计算相对路径
+                                rel_path = f.relative_to(OUTPUTS_DIR)
+                                output_file = {
+                                    "path": str(f),
+                                    "type": file_type,
+                                    "name": f.name,
+                                    "url": f"/outputs/{rel_path}".replace('\\', '/'),
+                                    "size": f.stat().st_size
+                                }
+                                print(f"[_execute_tool] 找到输出文件: {output_file}")
+                                break
+                        if output_file:
+                            break
+
+                    if not output_file:
+                        print(f"[_execute_tool] 未找到新生成的文件")
+
+                    return {
+                        "success": True,
+                        "output": output[:2000],
+                        "output_file": output_file
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "output": f"执行失败:\n{result.stderr or result.stdout}"[:2000]
+                    }
+
+            elif tool_name == "read":
+                # 读取文件
+                path = params.get("path", "")
+                print(f"[_execute_tool] read: path={path}")
+
+                # 尝试多个位置查找文件
+                filepath = None
+
+                # 1. OUTPUTS_DIR
+                test_path = OUTPUTS_DIR / path
+                if test_path.exists():
+                    filepath = test_path
+                    print(f"[_execute_tool] read: 在 outputs 找到文件")
+
+                # 2. UPLOADS_DIR
+                if not filepath:
+                    test_path = UPLOADS_DIR / path
+                    if test_path.exists():
+                        filepath = test_path
+                        print(f"[_execute_tool] read: 在 uploads 找到文件")
+
+                # 3. 尝试去掉路径前缀后查找
+                if not filepath and path.startswith("/uploads/"):
+                    clean_path = path[len("/uploads/"):]
+                    test_path = UPLOADS_DIR / clean_path
+                    if test_path.exists():
+                        filepath = test_path
+                        print(f"[_execute_tool] read: 在 uploads 找到文件 (去掉 /uploads/ 前缀)")
+
+                if not filepath and path.startswith("uploads/"):
+                    clean_path = path[len("uploads/"):]
+                    test_path = UPLOADS_DIR / clean_path
+                    if test_path.exists():
+                        filepath = test_path
+                        print(f"[_execute_tool] read: 在 uploads 找到文件 (去掉 uploads/ 前缀)")
+
+                if not filepath and path.startswith("/outputs/"):
+                    clean_path = path[len("/outputs/"):]
+                    test_path = OUTPUTS_DIR / clean_path
+                    if test_path.exists():
+                        filepath = test_path
+                        print(f"[_execute_tool] read: 在 outputs 找到文件 (去掉 /outputs/ 前缀)")
+
+                if not filepath and path.startswith("outputs/"):
+                    clean_path = path[len("outputs/"):]
+                    test_path = OUTPUTS_DIR / clean_path
+                    if test_path.exists():
+                        filepath = test_path
+                        print(f"[_execute_tool] read: 在 outputs 找到文件 (去掉 outputs/ 前缀)")
+
+                # 4. 绝对路径
+                if not filepath:
+                    test_path = Path(path)
+                    if test_path.exists():
+                        filepath = test_path
+                        print(f"[_execute_tool] read: 使用绝对路径")
+
+                if not filepath:
+                    print(f"[_execute_tool] read: 文件不存在, 尝试过的路径: OUTPUTS_DIR/{path}, UPLOADS_DIR/{path}, {path}")
+                    return {"success": False, "output": f"文件不存在: {path}\n提示: 上传的文件在 uploads/ 目录, 生成的文件在 outputs/ 目录"}
+
+                # 根据文件类型选择读取方式
+                suffix = filepath.suffix.lower()
+                print(f"[_execute_tool] read: 文件类型={suffix}")
+
+                if suffix in ['.xlsx', '.xls']:
+                    # Excel 文件 - 使用 pandas 读取
+                    import pandas as pd
+                    try:
+                        df = pd.read_excel(filepath)
+                        content = f"Excel 文件: {filepath.name}\n"
+                        content += f"行数: {len(df)}, 列数: {len(df.columns)}\n"
+                        content += f"列名: {list(df.columns)}\n\n"
+                        content += df.head(50).to_string()
+                        if len(df) > 50:
+                            content += f"\n\n... 共 {len(df)} 行，只显示前 50 行"
+                    except Exception as e:
+                        return {"success": False, "output": f"Excel 读取失败: {str(e)}"}
+
+                elif suffix == '.csv':
+                    # CSV 文件 - 使用 pandas 读取
+                    import pandas as pd
+                    try:
+                        df = pd.read_csv(filepath)
+                        content = f"CSV 文件: {filepath.name}\n"
+                        content += f"行数: {len(df)}, 列数: {len(df.columns)}\n"
+                        content += f"列名: {list(df.columns)}\n\n"
+                        content += df.head(50).to_string()
+                        if len(df) > 50:
+                            content += f"\n\n... 共 {len(df)} 行，只显示前 50 行"
+                    except Exception as e:
+                        return {"success": False, "output": f"CSV 读取失败: {str(e)}"}
+
+                elif suffix == '.json':
+                    # JSON 文件
+                    try:
+                        with open(filepath, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        content = json.dumps(data, ensure_ascii=False, indent=2)
+                        if len(content) > 10000:
+                            content = content[:10000] + "\n...[truncated]..."
+                    except Exception as e:
+                        return {"success": False, "output": f"JSON 读取失败: {str(e)}"}
+
+                elif suffix in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp']:
+                    # 图片文件 - 返回文件信息
+                    content = f"图片文件: {filepath.name}\n大小: {filepath.stat().st_size} bytes\n(图片内容无法以文本显示)"
+
+                else:
+                    # 其他文件尝试作为文本读取
+                    try:
+                        content = filepath.read_text(encoding="utf-8")
+                        if len(content) > 10000:
+                            content = content[:10000] + "\n...[truncated]..."
+                    except UnicodeDecodeError:
+                        return {"success": False, "output": f"无法读取二进制文件: {filepath.name}"}
+
+                return {"success": True, "output": content}
+
+            else:
+                return {"success": False, "output": f"未知工具: {tool_name}"}
+
+        except subprocess.TimeoutExpired:
+            return {"success": False, "output": "执行超时"}
+        except Exception as e:
+            return {"success": False, "output": f"执行失败: {str(e)}"}
+
+    async def agent_loop(
+        self,
+        skill_id: str,
+        context: str,
+        file_paths: List[str] = None,
+        conversation: List[Dict] = None,
+        pending_tool_call: Dict = None,
+        tool_confirmed: bool = False,
+        tool_rejected: bool = False,
+        user_edit: str = None
+    ) -> AsyncGenerator[str, None]:
+        """
+        真正的 Claude Code 风格 Agent 循环
+
+        多轮 AI 交互，每个工具调用都等待用户确认。
+        """
+        import asyncio
+        import time
+
+        # ===== 调试日志 =====
+        print(f"[Agent Loop] ========== 开始 ==========")
+        print(f"[Agent Loop] skill_id: {skill_id}")
+        print(f"[Agent Loop] context: {context[:200] if context else 'None'}...")
+        print(f"[Agent Loop] file_paths: {file_paths}")
+        print(f"[Agent Loop] conversation 数量: {len(conversation) if conversation else 0}")
+        print(f"[Agent Loop] pending_tool_call: {pending_tool_call}")
+        print(f"[Agent Loop] tool_confirmed: {tool_confirmed}, tool_rejected: {tool_rejected}")
+
+        # 加载技能
+        skill = self.db.query(Skill).filter(Skill.id == skill_id).first()
+        if not skill:
+            yield json.dumps({"type": "error", "message": "技能不存在"})
+            return
+
+        # ===== 快速模式：检查 config.json 中的 exec_mode =====
+        exec_mode = "ai"  # 默认 AI 模式
+        if skill.folder_path:
+            config_path = SKILLS_STORAGE_DIR / skill.folder_path / "config.json"
+            if config_path.exists():
+                try:
+                    config_data = json.loads(config_path.read_text(encoding="utf-8"))
+                    exec_mode = config_data.get("exec_mode", "ai")
+                except:
+                    pass
+
+        # 如果是 direct 模式且有脚本，直接执行
+        if exec_mode == "direct" and not pending_tool_call and not conversation and skill.folder_path and skill.entry_script:
+            skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
+            script_path = skill_folder / skill.entry_script
+
+            if script_path.exists() and script_path.suffix == '.py':
+                print(f"[Agent Loop] 检测到预定义脚本: {script_path}")
+
+                # 准备参数
+                input_file = None
+                if file_paths:
+                    fp = file_paths[0]
+                    if fp.startswith('/uploads/'):
+                        input_file = str(UPLOADS_DIR / fp[len('/uploads/'):])
+                    elif fp.startswith('uploads/'):
+                        input_file = str(UPLOADS_DIR / fp[len('uploads/'):])
+                    elif fp.startswith('/outputs/'):
+                        input_file = str(OUTPUTS_DIR / fp[len('/outputs/'):])
+                    elif fp.startswith('outputs/'):
+                        input_file = str(OUTPUTS_DIR / fp[len('outputs/'):])
+                    else:
+                        input_file = fp
+
+                if not input_file:
+                    yield json.dumps({"type": "error", "message": "请上传文件"})
+                    return
+
+                # 检查输入文件是否存在
+                if not Path(input_file).exists():
+                    yield json.dumps({"type": "error", "message": f"文件不存在: {input_file}"})
+                    return
+
+                yield json.dumps({
+                    "type": "message",
+                    "content": f"正在执行 {skill.name}..."
+                })
+                await asyncio.sleep(0)
+
+                # 执行脚本
+                try:
+                    import subprocess
+
+                    result = await asyncio.to_thread(
+                        lambda: subprocess.run(
+                            ["python", str(script_path), input_file],
+                            capture_output=True,
+                            text=True,
+                            timeout=120,
+                            cwd=str(skill_folder)
+                        )
+                    )
+
+                    print(f"[Agent Loop] 脚本执行: returncode={result.returncode}")
+                    print(f"[Agent Loop] stdout: {result.stdout[:500] if result.stdout else 'None'}")
+                    print(f"[Agent Loop] stderr: {result.stderr[:500] if result.stderr else 'None'}")
+
+                    if result.returncode == 0:
+                        # 检查是否生成了文件
+                        output_file = None
+                        for ext in ['.json', '.xlsx', '.csv', '.pdf', '.html']:
+                            for f in OUTPUTS_DIR.glob(f"*{ext}"):
+                                mtime = f.stat().st_mtime
+                                if time.time() - mtime < 30:
+                                    file_type = {
+                                        '.json': 'json', '.xlsx': 'excel', '.csv': 'csv',
+                                        '.pdf': 'pdf', '.html': 'html'
+                                    }.get(ext, 'file')
+                                    output_file = {
+                                        "path": str(f),
+                                        "type": file_type,
+                                        "name": f.name,
+                                        "url": f"/outputs/{f.name}"
+                                    }
+                                    break
+                            if output_file:
+                                break
+
+                        yield json.dumps({
+                            "type": "tool_result",
+                            "tool": "script",
+                            "success": True,
+                            "output": result.stdout or "执行成功",
+                            "output_file": output_file,
+                            "message": result.stdout or "执行成功"
+                        })
+                        await asyncio.sleep(0)
+
+                        yield json.dumps({
+                            "type": "message",
+                            "content": f"[OK] {result.stdout.strip() if result.stdout else '执行完成'}"
+                        })
+                        await asyncio.sleep(0)
+
+                        yield json.dumps({"type": "done", "message": "任务完成"})
+                        return
+
+                    else:
+                        yield json.dumps({
+                            "type": "error",
+                            "message": f"执行失败: {result.stderr or result.stdout}"
+                        })
+                        return
+
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    yield json.dumps({"type": "error", "message": f"脚本执行错误: {str(e)}"})
+                    return
+
+        # 读取 SKILL.md
+        skill_md_content = ""
+        if skill.folder_path:
+            skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
+            skill_md_path = skill_folder / "SKILL.md"
+            if skill_md_path.exists():
+                try:
+                    skill_md_content = skill_md_path.read_text(encoding="utf-8")
+                except:
+                    pass
+
+            # 读取 reference 目录
+            reference_dir = skill_folder / "reference"
+            if reference_dir.exists():
+                for ref_file in reference_dir.glob("*.md"):
+                    try:
+                        ref_text = ref_file.read_text(encoding="utf-8")
+                        if len(ref_text) > 5000:
+                            ref_text = ref_text[:5000] + "\n...[truncated]..."
+                        skill_md_content += f"\n\n## Reference: {ref_file.name}\n{ref_text}"
+                    except:
+                        pass
+
+        # 构建系统提示（精简版，加快响应）
+        # 获取 outputs 目录的绝对路径
+        outputs_path = str(OUTPUTS_DIR).replace('\\', '/')
+
+        uploads_path = str(UPLOADS_DIR).replace('\\', '/')
+
+        system_prompt = f"""你是技能执行助手。
+
+{skill_md_content[:5000] if skill_md_content else skill.description}
+
+## 规则
+1. write 工具写文件，bash 工具执行，read 工具读取文件
+2. 一次只调用一个工具
+3. **文件路径（必须使用绝对路径）**：
+   - 上传文件目录: {uploads_path}/
+   - 输出文件目录: {outputs_path}/
+   - bash 命令在 outputs 目录执行，不要 cd 到其他目录
+4. 重要：用户上传的文件路径会在消息中给出（如 uploads/xxx.xlsx），转换为绝对路径: {uploads_path}/xxx.xlsx
+5. 如果没有提供输入文件，直接生成示例数据
+6. 如果 read 工具失败，不要重试，使用示例数据
+7. 代码要点（使用英文引号，不要中文引号）：
+
+### PPT 生成 (Node.js)
+```javascript
+const pptx = require("pptxgenjs");
+const pres = new pptx();
+// ... 添加幻灯片
+pres.writeFile({{ fileName: "{outputs_path}/output.pptx" }});
+```
+
+### Excel 生成 (Node.js)
+```javascript
+const ExcelJS = require("exceljs");
+const workbook = new ExcelJS.Workbook();
+const sheet = workbook.addWorksheet("Sheet1");
+// sheet.columns = [{{ header: "Name", key: "name" }}];
+// sheet.addRow({{ name: "Test" }});
+workbook.xlsx.writeFile("{outputs_path}/output.xlsx");
+```
+
+### Python 生成文件
+```python
+import pandas as pd
+df = pd.DataFrame(data)
+df.to_excel("{outputs_path}/output.xlsx", index=False)
+# 或 df.to_csv("{outputs_path}/output.csv", index=False)
+```
+
+8. 代码出错时，修复后重试
+9. **重要**：任务完成后（文件已成功生成），直接返回完成消息，不要再调用任何工具
+10. **执行脚本**：先用 write 工具写脚本文件（如 convert.py），再用 bash 工具执行（如 python convert.py）。不要使用 heredoc（<< EOF）
+"""
+
+        # 初始化对话历史
+        messages = []
+
+        # 添加历史对话
+        if conversation:
+            for msg in conversation:
+                # 支持 Pydantic 模型和字典两种格式
+                role = msg.role if hasattr(msg, 'role') else msg.get("role", "")
+                content = msg.content if hasattr(msg, 'content') else msg.get("content", "")
+
+                if role == "user":
+                    messages.append({"role": "user", "content": content})
+                elif role == "assistant":
+                    messages.append({"role": "assistant", "content": content})
+                elif role == "tool_result":
+                    # 工具结果作为 user 消息
+                    messages.append({
+                        "role": "user",
+                        "content": f"工具执行结果:\n{content}"
+                    })
+
+        # 如果有待确认的工具调用
+        if pending_tool_call:
+            # 支持 Pydantic 模型和字典两种格式
+            tool_name = pending_tool_call.tool if hasattr(pending_tool_call, 'tool') else pending_tool_call.get("tool", "")
+            tool_params = pending_tool_call.params if hasattr(pending_tool_call, 'params') else pending_tool_call.get("params", {})
+
+            if tool_confirmed:
+                # 用户确认，执行工具
+                yield json.dumps({
+                    "type": "tool_executing",
+                    "tool": tool_name,
+                    "message": f"● **{tool_name.capitalize()}** 执行中..."
+                })
+                await asyncio.sleep(0)
+
+                result = await self._execute_tool(tool_name, tool_params)
+                print(f"[Agent Loop] 工具执行结果: success={result.get('success')}, output_file={result.get('output_file')}")
+
+                yield json.dumps({
+                    "type": "tool_result",
+                    "tool": tool_name,
+                    "success": result.get("success"),
+                    "output": result.get("output"),
+                    "output_file": result.get("output_file"),
+                    "message": f"● **{tool_name.capitalize()}**\n  ⎿  {result.get('output', '')[:500]}"
+                })
+                await asyncio.sleep(0)
+
+                # 如果成功生成了文件，直接完成任务，不再调用 AI
+                if result.get("success") and result.get("output_file"):
+                    print(f"[Agent Loop] 文件已生成，直接完成任务")
+                    yield json.dumps({
+                        "type": "message",
+                        "content": f"[OK] 已成功生成文件: {result['output_file'].get('name', 'output')}"
+                    })
+                    await asyncio.sleep(0)
+                    yield json.dumps({
+                        "type": "done",
+                        "message": "任务完成"
+                    })
+                    return  # 直接返回，不再继续
+
+                # 否则将结果加入对话历史，继续 AI 循环
+                messages.append({
+                    "role": "user",
+                    "content": f"工具 {tool_name} 执行结果:\n{json.dumps(result, ensure_ascii=False)}"
+                })
+
+            elif tool_rejected:
+                # 用户拒绝
+                messages.append({
+                    "role": "user",
+                    "content": f"用户拒绝执行 {tool_name}。请尝试其他方式或结束任务。"
+                })
+
+            elif user_edit:
+                # 用户修改了内容
+                messages.append({
+                    "role": "user",
+                    "content": f"用户修改了 {tool_name} 的内容:\n{user_edit}\n请使用修改后的内容继续。"
+                })
+
+        else:
+            # 新任务，添加用户输入
+            user_input = context
+            if file_paths:
+                # 明确告诉 AI 文件的实际路径（统一格式为 uploads/xxx 或 outputs/xxx）
+                resolved_paths = []
+                for fp in file_paths:
+                    if fp.startswith("/uploads/"):
+                        resolved_paths.append(f"uploads/{fp[len('/uploads/'):]}")
+                    elif fp.startswith("uploads/"):
+                        resolved_paths.append(fp)  # 已经是正确格式
+                    elif fp.startswith("/outputs/"):
+                        resolved_paths.append(f"outputs/{fp[len('/outputs/'):]}")
+                    elif fp.startswith("outputs/"):
+                        resolved_paths.append(fp)  # 已经是正确格式
+                    else:
+                        resolved_paths.append(fp)
+
+                user_input += f"\n\n输入文件路径（使用 read 工具时请使用这些路径）: {resolved_paths}"
+                print(f"[Agent Loop] 文件路径: {resolved_paths}")
+
+                file_content = self._read_files_for_ai(file_paths)
+                if file_content:
+                    user_input += f"\n\n附件内容:\n{file_content}"
+
+            if not messages or messages[-1].get("role") != "user":
+                messages.append({"role": "user", "content": user_input})
+                print(f"[Agent Loop] 添加用户消息, 长度: {len(user_input)}")
+                print(f"[Agent Loop] 用户消息内容预览: {user_input[:500]}...")
+
+        # 调用 AI
+        yield json.dumps({
+            "type": "thinking",
+            "message": "● AI 正在思考..."
+        })
+        await asyncio.sleep(0)
+
+        try:
+            # 使用工具调用
+            print(f"[Agent Loop] 调用 Claude API, messages 数量: {len(messages)}")
+            for i, m in enumerate(messages):
+                print(f"[Agent Loop] message[{i}]: role={m.get('role')}, content长度={len(m.get('content', ''))}")
+
+            def call_claude():
+                return self.client.messages.create(
+                    model=self.model,
+                    max_tokens=8000,
+                    system=system_prompt,
+                    tools=self._get_agent_tools(),
+                    messages=messages
+                )
+
+            response = await asyncio.to_thread(call_claude)
+
+            print(f"[Agent Loop] Claude 响应: stop_reason={response.stop_reason}, content_blocks={len(response.content)}")
+
+            # 解析响应
+            text_content = ""
+            tool_use = None
+
+            for block in response.content:
+                print(f"[Agent Loop] Block type: {block.type}")
+                if block.type == "text":
+                    text_content += block.text
+                elif block.type == "tool_use":
+                    tool_use = {
+                        "tool": block.name,
+                        "params": block.input,
+                        "id": block.id
+                    }
+                    print(f"[Agent Loop] Tool use: {block.name}")
+
+            # 如果有文字内容，发送给前端
+            if text_content:
+                print(f"[Agent Loop] 发送 message 事件, 长度: {len(text_content)}")
+                yield json.dumps({
+                    "type": "message",
+                    "content": text_content
+                })
+                await asyncio.sleep(0)
+
+            # 如果有工具调用，发送确认请求
+            if tool_use:
+                tool_name = tool_use["tool"]
+                tool_params = tool_use["params"]
+
+                # 构建显示信息
+                if tool_name == "write":
+                    display_name = f"Write({tool_params.get('path', '')})"
+                    preview = tool_params.get("content", "")[:200] + "..."
+                elif tool_name == "bash":
+                    display_name = f"Bash({tool_params.get('command', '')})"
+                    preview = tool_params.get("command", "")
+                else:
+                    display_name = f"{tool_name.capitalize()}({json.dumps(tool_params)[:50]})"
+                    preview = json.dumps(tool_params, ensure_ascii=False)[:200]
+
+                print(f"[Agent Loop] 发送 tool_call 事件: {display_name}")
+                yield json.dumps({
+                    "type": "tool_call",
+                    "tool": tool_name,
+                    "params": tool_params,
+                    "display_name": display_name,
+                    "preview": preview,
+                    "message": f"● **{display_name}**\n  ⎿  等待确认..."
+                })
+
+            else:
+                # 没有工具调用，任务可能完成了
+                print(f"[Agent Loop] 无工具调用, stop_reason={response.stop_reason}")
+                if response.stop_reason == "end_turn":
+                    yield json.dumps({
+                        "type": "done",
+                        "message": "任务完成"
+                    })
+                else:
+                    # 其他情况也发送完成（比如 stop_reason 是 max_tokens）
+                    yield json.dumps({
+                        "type": "done",
+                        "message": f"AI 响应完成 (stop_reason: {response.stop_reason})"
+                    })
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[Agent Loop] 错误: {str(e)}")
+            yield json.dumps({
+                "type": "error",
+                "message": f"AI 调用失败: {str(e)}"
+            })

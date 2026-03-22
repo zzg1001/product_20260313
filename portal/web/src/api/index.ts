@@ -424,6 +424,97 @@ export interface AnalyzeStreamEvent {
   }
 }
 
+// ========== Claude Code 风格：步骤化技能执行 ==========
+
+export interface SkillChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface SkillChatAction {
+  type: 'write' | 'run' | 'generate'
+  data: Record<string, any>
+}
+
+export interface SkillChatRequest {
+  skill_id: string
+  context: string
+  conversation?: SkillChatMessage[]
+  file_paths?: string[]
+  user_choice?: 'execute' | 'skip' | null
+  pending_actions?: SkillChatAction[]
+  current_action_index?: number
+}
+
+export interface SkillChatEvent {
+  type: 'content' | 'actions_planned' | 'action_pending' | 'action_executing' | 'action_result' | 'action_skipped' | 'all_actions_done' | 'done' | 'error'
+  // For 'content' event - streaming text
+  text?: string
+  // For 'actions_planned' event
+  actions?: SkillChatAction[]
+  total?: number
+  // For 'action_pending', 'action_executing', 'action_result', 'action_skipped' events
+  index?: number
+  action?: SkillChatAction
+  // For 'action_result' event
+  success?: boolean
+  output?: string
+  output_file?: {
+    path: string
+    type: string
+    name: string
+    url: string
+    size: number
+  }
+  // For 'error' event
+  message?: string
+  // For 'done' event
+  full_response?: string
+}
+
+// Claude Code 风格：系统级工具调用确认
+export interface SkillExecuteInteractiveRequest {
+  skill_id: string
+  context: string
+  file_paths?: string[]
+  confirmed_step?: number  // -1 表示还没开始
+  auto_confirm?: boolean   // 全部执行
+  skip_current?: boolean   // 跳过当前步骤
+}
+
+export interface ExecutionStep {
+  type: 'generate' | 'write' | 'run'
+  name: string
+  description: string
+  command?: string
+}
+
+export interface SkillExecuteInteractiveEvent {
+  type: 'step_start' | 'step_done' | 'step_error' | 'all_done' | 'error'
+  // Common
+  message?: string
+  step?: ExecutionStep | string
+  index?: number
+  // For 'steps_planned'
+  steps?: ExecutionStep[]
+  total?: number
+  // For 'step_confirm', 'step_executing', 'step_result'
+  // index?: number  // 已在上面定义
+  // step?: ExecutionStep  // 已在上面定义
+  // For 'step_result'
+  success?: boolean
+  output?: string
+  output_file?: {
+    path: string
+    type: string
+    name: string
+    url: string
+    size: number
+  }
+  // For 'error'
+  message?: string
+}
+
 export const agentApi = {
   // Chat (non-streaming)
   chat: (data: ChatRequest) =>
@@ -608,6 +699,221 @@ export const agentApi = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+
+  // ========== Claude Code 风格：步骤化技能执行 ==========
+
+  // Skill chat (streaming via SSE) - Claude Code style interactive execution
+  skillChatStream: async function* (
+    data: SkillChatRequest,
+    signal?: AbortSignal
+  ): AsyncGenerator<SkillChatEvent> {
+    const url = `${API_BASE_URL}/agent/skill-chat`
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+      signal,
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('No response body')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonData = line.slice(6)
+            try {
+              const parsed = JSON.parse(jsonData)
+              yield parsed as SkillChatEvent
+            } catch (e) {
+              // Ignore parse errors for malformed chunks
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  },
+
+  // Claude Code 风格：系统级工具调用确认
+  executeInteractive: async function* (
+    data: SkillExecuteInteractiveRequest,
+    signal?: AbortSignal
+  ): AsyncGenerator<SkillExecuteInteractiveEvent> {
+    const url = `${API_BASE_URL}/agent/execute-interactive`
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+      signal,
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('No response body')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonData = line.slice(6)
+            try {
+              const parsed = JSON.parse(jsonData)
+              yield parsed as SkillExecuteInteractiveEvent
+            } catch (e) {
+              // Ignore parse errors for malformed chunks
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  },
+}
+
+// ========== 真正的 Claude Code 风格：多轮 AI 交互 ==========
+
+export interface ToolCall {
+  tool: string  // write, bash, read
+  params: Record<string, any>
+  display_name?: string
+  preview?: string
+}
+
+export interface AgentLoopMessage {
+  role: 'user' | 'assistant' | 'tool_result'
+  content: string
+  tool_call?: ToolCall
+  tool_result?: Record<string, any>
+}
+
+export interface AgentLoopRequest {
+  skill_id: string
+  context: string
+  file_paths?: string[]
+  conversation: AgentLoopMessage[]
+  // 工具确认
+  pending_tool_call?: ToolCall
+  tool_confirmed?: boolean
+  tool_rejected?: boolean
+  user_edit?: string
+}
+
+export interface AgentLoopEvent {
+  type: 'thinking' | 'message' | 'tool_call' | 'tool_executing' | 'tool_result' | 'done' | 'error'
+  message?: string
+  content?: string
+  // For tool_call
+  tool?: string
+  params?: Record<string, any>
+  display_name?: string
+  preview?: string
+  // For tool_result
+  success?: boolean
+  output?: string
+  output_file?: {
+    path: string
+    type: string
+    name: string
+    url: string
+    size: number
+  }
+}
+
+export const agentLoopApi = {
+  /**
+   * 真正的 Claude Code 风格 Agent 循环
+   * 多轮 AI 交互，每个工具调用都等待用户确认
+   */
+  loop: async function* (
+    data: AgentLoopRequest,
+    signal?: AbortSignal
+  ): AsyncGenerator<AgentLoopEvent> {
+    const url = `${API_BASE_URL}/agent/loop`
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+      signal,
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('No response body')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonData = line.slice(6)
+            try {
+              const parsed = JSON.parse(jsonData)
+              yield parsed as AgentLoopEvent
+            } catch (e) {
+              // Ignore parse errors
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  },
 }
 
 // File preview response types

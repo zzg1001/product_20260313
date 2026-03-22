@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, computed, onUnmounted, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { agentApi, dataNotesApi, type ChatMessage, type DataNote } from '@/api'
+import { agentApi, dataNotesApi, agentLoopApi, type ChatMessage, type DataNote, type SkillChatRequest, type SkillChatEvent, type SkillExecuteInteractiveRequest, type SkillExecuteInteractiveEvent, type ExecutionStep, type AgentLoopRequest, type AgentLoopEvent, type AgentLoopMessage, type ToolCall } from '@/api'
 import config from '@/config'
 import SlashCommandPopup from './SlashCommandPopup.vue'
 import ChatHistory from './ChatHistory.vue'
@@ -11,7 +11,7 @@ import { chatSessionsApi, type ChatSession, type ChatSessionMessage } from '@/ap
 
 // 输出文件类型
 interface OutputFile {
-  type: 'ppt' | 'word' | 'markdown' | 'pdf' | 'png' | 'jpg' | 'video' | 'html' | 'excel' | 'code' | 'file' | 'other'
+  type: 'ppt' | 'word' | 'markdown' | 'pdf' | 'png' | 'jpg' | 'video' | 'html' | 'excel' | 'code' | 'file' | 'other' | 'json' | 'csv' | 'image' | 'md' | 'txt' | 'svg'
   name: string
   url: string
   size?: string
@@ -631,13 +631,18 @@ const handleInputBlur = () => {
 // 停止控制器
 let abortController: AbortController | null = null
 
-// 强制停止
+// 强制停止（停止所有执行）
 const stopProcessing = () => {
+  console.log('[stopProcessing] 停止所有执行')
+
+  // 中止当前的 API 请求
   if (abortController) {
     abortController.abort()
     abortController = null
   }
-  isProcessing.value = false
+
+  // 调用全局停止函数
+  stopAllExecution()
 }
 
 // 清空对话（新建会话）
@@ -823,7 +828,7 @@ const addFiles = async (files: File[]) => {
       if (idx !== -1) {
         uploadedFiles.value[idx] = {
           ...uploadedFiles.value[idx],
-          serverPath: response.path,
+          serverPath: response.url,  // 使用相对 URL 路径，如 /uploads/xxx
           uploading: false
         }
       }
@@ -1157,11 +1162,43 @@ const stopResize = () => {
 }
 
 // 点击面板外部时关闭面板
+// 是否正在执行 Agent Loop（执行期间不允许关闭面板）
+const isAgentLoopRunning = ref(false)
+
+// 全局停止标志 - 用于停止所有执行
+const isStopRequested = ref(false)
+
+// 停止所有执行
+const stopAllExecution = () => {
+  console.log('[stopAllExecution] 停止所有执行')
+  isStopRequested.value = true
+  isAgentLoopRunning.value = false
+  isProcessing.value = false
+  isPaused.value = false
+  pendingExecution.value = null
+  skillPanelProcessing.value = false
+
+  // 中止当前的 API 请求
+  if (skillChatAbortController.value) {
+    skillChatAbortController.value.abort()
+  }
+
+  // 关闭面板
+  closeSkillExecution(false)
+
+  // 重置停止标志（延迟，确保所有循环都能检测到）
+  setTimeout(() => {
+    isStopRequested.value = false
+  }, 500)
+}
+
 const handleClickOutsidePanel = (e: MouseEvent) => {
   if (!showSkillExecution.value) return
   if (!skillSidePanelRef.value) return
   if (isResizing.value) return  // 拖拽调整宽度时不关闭
   if (isDraggingPanel.value) return  // 拖拽移动面板时不关闭
+  if (isAgentLoopRunning.value) return  // Agent Loop 执行中不关闭
+  if (skillPanelProcessing.value) return  // 技能处理中不关闭
 
   // 检查点击是否在面板外部
   if (!skillSidePanelRef.value.contains(e.target as Node)) {
@@ -1222,6 +1259,8 @@ interface SkillPanelMessage {
   timestamp: Date
   isExecuting?: boolean
   isConfirmation?: boolean  // 是否是确认消息
+  waitingConfirm?: boolean  // 等待工具调用确认
+  toolCall?: ToolCall  // 待确认的工具调用
 }
 const skillPanelMessages = ref<SkillPanelMessage[]>([])
 const skillPanelInput = ref('')
@@ -1232,6 +1271,21 @@ const skillPanelChatRef = ref<HTMLElement | null>(null)
 const skillPanelInputRef = ref<HTMLTextAreaElement | null>(null)
 const skillPanelWaitingConfirm = ref(false)  // 等待用户确认
 const skillPanelSummary = ref('')  // AI 总结的内容
+
+// ========== Claude Code 风格：步骤化执行状态 ==========
+const skillChatConversation = ref<{ role: 'user' | 'assistant'; content: string }[]>([])
+const skillChatAbortController = ref<AbortController | null>(null)
+// 待执行的操作列表
+const pendingActions = ref<{ type: string; data: Record<string, any> }[]>([])
+const currentActionIndex = ref(0)
+const actionPending = ref(false)  // 是否有操作等待确认
+const autoExecuteAll = ref(false)  // 自动执行所有步骤（Yes to all）
+
+// Claude Code 风格：系统级执行步骤
+const executionSteps = ref<ExecutionStep[]>([])
+const currentStepIndex = ref(-1)
+const currentStepData = ref<ExecutionStep | null>(null)
+const interactiveResolve = ref<((choice: 'execute' | 'execute_all' | 'skip' | 'cancel') => void) | null>(null)  // 用于等待用户确认
 
 // 需要交互的技能列表（可配置）
 const interactiveSkills = new Set([
@@ -1365,6 +1419,19 @@ const openSkillExecution = (
   skillPanelProcessing.value = false
   skillPanelComplete.value = false
   skillPanelParams.value = {}
+  skillPanelWaitingConfirm.value = false
+  skillPanelSummary.value = ''
+
+  // Claude Code 风格：初始化对话历史和操作状态
+  skillChatConversation.value = []
+  pendingActions.value = []
+  currentActionIndex.value = 0
+  actionPending.value = false
+  autoExecuteAll.value = false
+  if (skillChatAbortController.value) {
+    skillChatAbortController.value.abort()
+    skillChatAbortController.value = null
+  }
 
   showSkillExecution.value = true
 
@@ -1392,6 +1459,29 @@ const generatePanelGreeting = (skill: { name: string; description: string }, con
   return `Hi! 我是 **${skill.name}**\n\n${skill.description}\n\n请告诉我你的具体需求，我会整理后请你确认再执行。`
 }
 
+// 工具调用确认/拒绝处理
+const handleToolConfirm = async () => {
+  console.log('[UI] handleToolConfirm clicked')
+  if ((window as any).__agentLoopConfirm) {
+    try {
+      await (window as any).__agentLoopConfirm()
+    } catch (error) {
+      console.error('[UI] handleToolConfirm error:', error)
+    }
+  }
+}
+
+const handleToolReject = async () => {
+  console.log('[UI] handleToolReject clicked')
+  if ((window as any).__agentLoopReject) {
+    try {
+      await (window as any).__agentLoopReject()
+    } catch (error) {
+      console.error('[UI] handleToolReject error:', error)
+    }
+  }
+}
+
 // 关闭技能执行面板
 const closeSkillExecution = (cancelled = false) => {
   // 如果是取消关闭，恢复 configuring 状态的步骤
@@ -1400,24 +1490,30 @@ const closeSkillExecution = (cancelled = false) => {
     const msg = messages.value.find(m => m.id === messageId)
     if (msg?.skillPlan) {
       const stepIndex = msg.skillPlan.findIndex(s => s.id === stepId)
-      if (stepIndex !== -1) {
-        const currentStep = msg.skillPlan[stepIndex]
-
-        if (fromPaused) {
+      const currentStep = stepIndex !== -1 ? msg.skillPlan[stepIndex] : null
+      if (currentStep) {
+        // 如果步骤已经完成或出错，不要重置状态
+        if (currentStep.status === 'completed' || currentStep.status === 'error') {
+          // 已完成/出错的步骤，保持状态不变
+          console.log('[closeSkillExecution] 步骤已完成/出错，保持状态:', currentStep.status)
+        } else if (fromPaused) {
           // 从暂停状态取消，恢复为 running（暂停状态）
           currentStep.status = 'running'
           // 不需要重置 pendingExecution，保持暂停状态
-        } else {
-          // 从完成状态重跑取消，恢复历史状态
+        } else if (currentStep.status === 'configuring' || currentStep.status === 'running') {
+          // 只有 configuring 或 running 状态才恢复历史
           for (let i = stepIndex; i < msg.skillPlan.length; i++) {
             const s = msg.skillPlan[i]
-            if (s.outputHistory?.length) {
+            if (s && s.outputHistory?.length) {
               const lastHistory = s.outputHistory.pop()
-              s.status = 'completed'
-              s.output = lastHistory?.output
-              s.outputFile = lastHistory?.outputFile
-              s.userInput = lastHistory?.userInput
-            } else {
+              if (lastHistory) {
+                s.status = 'completed'
+                s.output = lastHistory.output
+                s.outputFile = lastHistory.outputFile
+                s.userInput = lastHistory.userInput
+              }
+            } else if (s && s.status !== 'completed' && s.status !== 'error') {
+              // 只有非完成/非错误状态才重置为 pending
               s.status = 'pending'
             }
           }
@@ -1477,12 +1573,12 @@ const panelAddFiles = async (files: File[]) => {
     try {
       console.log('[panelAddFiles] 开始上传:', uploadedFile.name)
       const response = await agentApi.upload(uploadedFile.file)
-      console.log('[panelAddFiles] 上传成功:', uploadedFile.name, '-> serverPath:', response.path)
+      console.log('[panelAddFiles] 上传成功:', uploadedFile.name, '-> serverPath:', response.url)
 
       // 使用新数组触发响应式更新
       panelUploadedFiles.value = panelUploadedFiles.value.map(f =>
         f.id === uploadedFile.id
-          ? { ...f, serverPath: response.path, uploading: false }
+          ? { ...f, serverPath: response.url, uploading: false }  // 使用相对 URL 路径
           : f
       )
       console.log('[panelAddFiles] 更新后的文件列表:', panelUploadedFiles.value.map(f => ({ name: f.name, serverPath: f.serverPath, uploading: f.uploading })))
@@ -1544,7 +1640,7 @@ const panelHandleDrop = (e: DragEvent) => {
   }
 }
 
-// 发送面板消息 - 多轮对话
+// 发送面板消息 - Claude Code 风格多轮对话
 const sendSkillPanelMessage = async () => {
   const hasText = skillPanelInput.value.trim()
   const hasFiles = panelUploadedFiles.value.length > 0
@@ -1575,7 +1671,7 @@ const sendSkillPanelMessage = async () => {
     panelUploadedFiles.value = []
   }
 
-  // 添加用户消息
+  // 添加用户消息到面板显示
   skillPanelMessages.value.push({
     id: Date.now(),
     role: 'user',
@@ -1583,20 +1679,251 @@ const sendSkillPanelMessage = async () => {
     timestamp: new Date()
   })
 
-  scrollSkillPanelToBottom()
-  skillPanelProcessing.value = true
-
-  // AI 回复占位
-  const aiMsgId = Date.now() + 1
-  skillPanelMessages.value.push({
-    id: aiMsgId,
-    role: 'assistant',
-    content: '',
-    timestamp: new Date()
+  // 同时更新对话历史（用于发送给 API）
+  skillChatConversation.value.push({
+    role: 'user',
+    content: userMessage
   })
 
+  scrollSkillPanelToBottom()
+
+  // 调用 Claude Code 风格的技能对话 API
+  await callSkillChatStream()
+}
+
+// Claude Code 风格：调用技能对话流式 API
+const callSkillChatStream = async (userChoice?: 'execute' | 'skip' | null) => {
+  const stepInfo = executingStepInfo.value
+  if (!stepInfo) return
+
+  // 从 messages 中获取当前步骤的 skillId
+  const msg = messages.value.find(m => m.id === stepInfo.messageId)
+  const currentStep = msg?.skillPlan?.find(s => s.id === stepInfo.stepId)
+  const skillId = currentStep?.skillId || ''
+
+  if (!skillId) {
+    console.warn('[callSkillChatStream] No skillId found, falling back to chat stream')
+    await fallbackToChatStream(Date.now())
+    return
+  }
+
+  skillPanelProcessing.value = true
+
+  // AI 回复占位（只在首次调用时添加）
+  let aiMsgId = Date.now() + 1
+  if (!userChoice) {
+    skillPanelMessages.value.push({
+      id: aiMsgId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date()
+    })
+  }
+
+  // 创建 AbortController 用于取消请求
+  skillChatAbortController.value = new AbortController()
+
   try {
-    // 收集所有用户输入作为上下文
+    const request: SkillChatRequest = {
+      skill_id: skillId,
+      context: executionContext.value || '',
+      conversation: skillChatConversation.value,
+      file_paths: panelCollectedFilePaths.value.length > 0 ? [...panelCollectedFilePaths.value] : undefined,
+      user_choice: userChoice,
+      pending_actions: pendingActions.value.length > 0 ? pendingActions.value : undefined,
+      current_action_index: currentActionIndex.value
+    }
+
+    let fullContent = ''
+
+    for await (const event of agentApi.skillChatStream(request, skillChatAbortController.value.signal)) {
+      if (event.type === 'content' && event.text) {
+        // 流式文本内容
+        fullContent += event.text
+        // 移除 ACTION 标记再显示
+        const displayContent = fullContent.replace(/<!--ACTION:\w+-->[\s\S]*?<!--END_ACTION-->/g, '')
+        const msgIndex = skillPanelMessages.value.findIndex(m => m.id === aiMsgId)
+        if (msgIndex !== -1) {
+          skillPanelMessages.value[msgIndex] = {
+            ...skillPanelMessages.value[msgIndex],
+            content: displayContent
+          }
+        }
+        scrollSkillPanelToBottom()
+
+      } else if (event.type === 'actions_planned') {
+        // AI 规划了操作列表
+        console.log('[SkillChat] Actions planned:', event.actions)
+        pendingActions.value = event.actions || []
+
+      } else if (event.type === 'action_pending') {
+        // 有操作等待确认
+        console.log('[SkillChat] Action pending:', event.index, event.action)
+        currentActionIndex.value = event.index || 0
+
+        // 构建操作确认消息
+        const action = event.action
+        let actionDesc = ''
+        if (action?.type === 'write') {
+          actionDesc = `📝 **写入文件**: ${action.data?.file || 'unknown'}`
+        } else if (action?.type === 'run') {
+          actionDesc = `▶️ **执行命令**: \`${action.data?.command || 'unknown'}\``
+        } else if (action?.type === 'generate') {
+          actionDesc = `🔧 **生成内容**: ${action.data?.type || 'unknown'}`
+        }
+
+        skillPanelSummary.value = `${actionDesc}\n\n(${(event.index || 0) + 1}/${event.total || 1})`
+
+        // 如果开启了自动执行，直接执行不等待确认
+        if (autoExecuteAll.value) {
+          console.log('[SkillChat] Auto executing action:', event.index)
+          // 添加自动执行提示
+          skillPanelMessages.value.push({
+            id: Date.now(),
+            role: 'user',
+            content: `✓ 自动执行: ${actionDesc.replace(/\*\*/g, '')}`,
+            timestamp: new Date()
+          })
+          scrollSkillPanelToBottom()
+          // 继续执行（不在这里调用，让流程继续）
+          // 通过设置状态触发下一步
+          actionPending.value = false
+          skillPanelWaitingConfirm.value = false
+          // 延迟一点再执行，让UI更新
+          setTimeout(() => {
+            callSkillChatStream('execute')
+          }, 100)
+        } else {
+          // 等待用户确认
+          actionPending.value = true
+          skillPanelWaitingConfirm.value = true
+        }
+
+      } else if (event.type === 'action_executing') {
+        // 正在执行操作
+        console.log('[SkillChat] Action executing:', event.index)
+        actionPending.value = false
+        skillPanelWaitingConfirm.value = false
+
+        // 添加执行中消息
+        skillPanelMessages.value.push({
+          id: Date.now(),
+          role: 'assistant',
+          content: `⏳ 正在执行步骤 ${(event.index || 0) + 1}...`,
+          timestamp: new Date(),
+          isExecuting: true
+        })
+        scrollSkillPanelToBottom()
+
+      } else if (event.type === 'action_result') {
+        // 操作执行结果
+        console.log('[SkillChat] Action result:', event)
+
+        // 更新最后一条消息
+        const lastMsg = skillPanelMessages.value[skillPanelMessages.value.length - 1]
+        if (lastMsg?.isExecuting) {
+          lastMsg.isExecuting = false
+          lastMsg.content = event.success
+            ? `✅ 步骤 ${(event.index || 0) + 1} 完成: ${event.output || '成功'}`
+            : `❌ 步骤 ${(event.index || 0) + 1} 失败: ${event.output || '未知错误'}`
+        }
+
+        // 如果有输出文件，更新到当前步骤
+        if (event.output_file) {
+          const msgToUpdate = messages.value.find(m => m.id === stepInfo.messageId)
+          if (msgToUpdate?.skillPlan) {
+            const stepToUpdate = msgToUpdate.skillPlan.find(s => s.id === stepInfo.stepId)
+            if (stepToUpdate) {
+              stepToUpdate.outputFile = {
+                type: event.output_file.type as OutputFile['type'],
+                name: event.output_file.name,
+                url: event.output_file.url,
+                size: event.output_file.size?.toString()
+              }
+            }
+          }
+        }
+
+        scrollSkillPanelToBottom()
+
+      } else if (event.type === 'action_skipped') {
+        // 用户跳过了操作
+        console.log('[SkillChat] Action skipped:', event.index)
+        skillPanelMessages.value.push({
+          id: Date.now(),
+          role: 'assistant',
+          content: `⏭️ 已跳过步骤 ${(event.index || 0) + 1}`,
+          timestamp: new Date()
+        })
+        scrollSkillPanelToBottom()
+
+      } else if (event.type === 'all_actions_done') {
+        // 所有操作完成
+        console.log('[SkillChat] All actions done')
+        actionPending.value = false
+        skillPanelWaitingConfirm.value = false
+        pendingActions.value = []
+        currentActionIndex.value = 0
+
+        // 添加完成消息
+        skillPanelMessages.value.push({
+          id: Date.now(),
+          role: 'assistant',
+          content: '🎉 所有步骤执行完成！',
+          timestamp: new Date()
+        })
+
+        // 更新技能状态
+        const msgToUpdate = messages.value.find(m => m.id === stepInfo.messageId)
+        if (msgToUpdate?.skillPlan) {
+          const stepToUpdate = msgToUpdate.skillPlan.find(s => s.id === stepInfo.stepId)
+          if (stepToUpdate) {
+            stepToUpdate.status = 'completed'
+            stepToUpdate.output = '执行完成'
+          }
+        }
+
+        // 延迟关闭面板
+        setTimeout(() => {
+          closeSkillExecution(false)
+        }, 1500)
+
+      } else if (event.type === 'done') {
+        // 完成（无操作时）
+        console.log('[SkillChat] Done:', event)
+
+      } else if (event.type === 'error') {
+        // 错误
+        console.error('[SkillChat] Error:', event.message)
+        skillPanelMessages.value.push({
+          id: Date.now(),
+          role: 'assistant',
+          content: `❌ 错误: ${event.message}`,
+          timestamp: new Date()
+        })
+        actionPending.value = false
+        scrollSkillPanelToBottom()
+      }
+    }
+
+  } catch (error: any) {
+    console.error('[SkillChat] Stream error:', error)
+    // 如果是取消导致的错误，忽略
+    if (error.name === 'AbortError') {
+      return
+    }
+
+    // 回退到旧的对话方式
+    await fallbackToChatStream(aiMsgId)
+  } finally {
+    skillPanelProcessing.value = false
+    skillChatAbortController.value = null
+  }
+}
+
+// 回退到旧的聊天流方式
+const fallbackToChatStream = async (aiMsgId: number) => {
+  try {
     const userInputs = skillPanelMessages.value
       .filter(m => m.role === 'user')
       .map(m => m.content)
@@ -1607,7 +1934,7 @@ const sendSkillPanelMessage = async () => {
 
     let fullContent = ''
     for await (const chunk of agentApi.chatStream({
-      message: `用户需求：${userMessage}\n\n请根据用户的需求，总结一下你理解的要点，然后询问用户是否确认执行。如果用户之前有提过其他要求，也要整合进来。`,
+      message: `用户需求：${userInputs[userInputs.length - 1] || ''}\n\n请根据用户的需求，总结一下你理解的要点，然后询问用户是否确认执行。如果用户之前有提过其他要求，也要整合进来。`,
       history: history
     })) {
       fullContent += chunk
@@ -1621,12 +1948,10 @@ const sendSkillPanelMessage = async () => {
       scrollSkillPanelToBottom()
     }
 
-    // 生成总结并等待确认
     skillPanelSummary.value = userInputs.join('；')
     skillPanelWaitingConfirm.value = true
 
   } catch (error: any) {
-    // 如果 API 调用失败，使用模拟回复
     const userInputs = skillPanelMessages.value
       .filter(m => m.role === 'user')
       .map(m => m.content)
@@ -1645,8 +1970,6 @@ const sendSkillPanelMessage = async () => {
     skillPanelSummary.value = userInputs.join('；')
     skillPanelWaitingConfirm.value = true
     scrollSkillPanelToBottom()
-  } finally {
-    skillPanelProcessing.value = false
   }
 }
 
@@ -1656,33 +1979,111 @@ const generateAISummary = (userInputs: string[], skillName: string): string => {
   return `好的，我来确认一下你的需求：\n\n**任务**：${skillName}\n**要求**：${requirements}\n\n请确认以上信息是否正确？\n• 确认无误 → 点击「确认执行」\n• 需要修改 → 继续输入补充`
 }
 
-// 确认执行
+// 确认执行 - Claude Code 风格：执行当前操作
 const confirmExecuteSkill = () => {
   skillPanelWaitingConfirm.value = false
 
-  // 添加确认消息
+  // 系统级工具调用确认模式
+  if (interactiveResolve.value) {
+    skillPanelMessages.value.push({
+      id: Date.now(),
+      role: 'user',
+      content: '✓ 确认执行',
+      timestamp: new Date()
+    })
+    scrollSkillPanelToBottom()
+    interactiveResolve.value('execute')
+    return
+  }
+
+  // 旧模式：AI 输出 ACTION 标记
+  const action = pendingActions.value[currentActionIndex.value]
+  let actionLabel = '执行'
+  if (action?.type === 'write') {
+    actionLabel = `写入 ${action.data?.file || '文件'}`
+  } else if (action?.type === 'run') {
+    actionLabel = `执行 ${action.data?.command || '命令'}`
+  } else if (action?.type === 'generate') {
+    actionLabel = `生成 ${action.data?.type || '内容'}`
+  }
+
   skillPanelMessages.value.push({
     id: Date.now(),
     role: 'user',
-    content: '✓ 确认执行',
+    content: `✓ ${actionLabel}`,
     timestamp: new Date()
   })
 
   scrollSkillPanelToBottom()
 
-  // 执行 skill
-  executeSkillPanel()
+  // Claude Code 风格：执行当前操作
+  callSkillChatStream('execute')
+}
+
+// 跳过当前操作
+const skipCurrentAction = () => {
+  skillPanelWaitingConfirm.value = false
+
+  skillPanelMessages.value.push({
+    id: Date.now(),
+    role: 'user',
+    content: '→ 跳过此步骤',
+    timestamp: new Date()
+  })
+
+  scrollSkillPanelToBottom()
+
+  // 系统级工具调用确认模式
+  if (interactiveResolve.value) {
+    interactiveResolve.value('skip')
+    return
+  }
+
+  // 旧模式：跳过当前操作
+  callSkillChatStream('skip')
+}
+
+// 全部执行（Yes to all）
+const executeAllActions = () => {
+  autoExecuteAll.value = true
+  skillPanelWaitingConfirm.value = false
+
+  skillPanelMessages.value.push({
+    id: Date.now(),
+    role: 'user',
+    content: '✓✓ 全部执行',
+    timestamp: new Date()
+  })
+
+  scrollSkillPanelToBottom()
+
+  // 系统级工具调用确认模式
+  if (interactiveResolve.value) {
+    interactiveResolve.value('execute_all')
+    return
+  }
+
+  // 旧模式：执行当前操作
+  callSkillChatStream('execute')
 }
 
 // 继续补充
 const continueAddDetails = () => {
   skillPanelWaitingConfirm.value = false
+  actionPending.value = false
   skillPanelMessages.value.push({
     id: Date.now(),
     role: 'assistant',
     content: '好的，请继续补充你的要求：',
     timestamp: new Date()
   })
+
+  // 更新对话历史
+  skillChatConversation.value.push({
+    role: 'assistant',
+    content: '好的，请继续补充你的要求：'
+  })
+
   scrollSkillPanelToBottom()
   nextTick(() => {
     skillPanelInputRef.value?.focus()
@@ -1691,6 +2092,16 @@ const continueAddDetails = () => {
 
 // 取消执行
 const cancelSkillExecution = () => {
+  // 系统级工具调用确认模式
+  if (interactiveResolve.value) {
+    interactiveResolve.value('cancel')
+    return
+  }
+
+  // 取消正在进行的请求
+  if (skillChatAbortController.value) {
+    skillChatAbortController.value.abort()
+  }
   closeSkillExecution(true)  // 传入 true 表示取消，需要恢复状态
 }
 
@@ -1923,6 +2334,208 @@ const handleSkillComplete = async (result: { success: boolean; output?: string; 
             ;(window as any).__lastSkillParams = params
             ;(window as any).__lastPanelFiles = panelFilePaths
 
+            // ========== Claude Code 风格：使用交互式执行 ==========
+            // 打开右侧面板进行交互式执行
+            executingSkill.value = { name: step.skillName, icon: step.skillIcon, description: step.description }
+            executionContext.value = contextValue
+            executingStepInfo.value = { messageId, stepId: step.id }
+
+            // 初始化面板状态
+            skillPanelMessages.value = [{
+              id: Date.now(),
+              role: 'assistant',
+              content: `正在执行 **${step.skillName}**...\n\n${step.description}`,
+              timestamp: new Date()
+            }]
+            skillPanelInput.value = ''
+            skillPanelProcessing.value = true
+            skillPanelComplete.value = false
+            skillPanelWaitingConfirm.value = false
+            skillChatConversation.value = []
+            pendingActions.value = []
+            currentActionIndex.value = 0
+            actionPending.value = false
+            autoExecuteAll.value = false
+            panelCollectedFilePaths.value = finalFilePaths
+
+            showSkillExecution.value = true
+            scrollSkillPanelToBottom()
+
+            // 调用交互式执行 API
+            try {
+              const request: SkillChatRequest = {
+                skill_id: step.skillId || '',
+                context: contextValue,
+                conversation: [],
+                file_paths: finalFilePaths.length > 0 ? finalFilePaths : undefined
+              }
+
+              let fullContent = ''
+              const aiMsgId = Date.now() + 1
+              skillPanelMessages.value.push({
+                id: aiMsgId,
+                role: 'assistant',
+                content: '',
+                timestamp: new Date()
+              })
+
+              for await (const event of agentApi.skillChatStream(request)) {
+                if (event.type === 'content' && event.text) {
+                  fullContent += event.text
+                  const displayContent = fullContent.replace(/<!--ACTION:\w+-->[\s\S]*?<!--END_ACTION-->/g, '')
+                  const msgIndex = skillPanelMessages.value.findIndex(m => m.id === aiMsgId)
+                  if (msgIndex !== -1) {
+                    skillPanelMessages.value[msgIndex] = {
+                      ...skillPanelMessages.value[msgIndex],
+                      content: displayContent
+                    }
+                  }
+                  scrollSkillPanelToBottom()
+
+                } else if (event.type === 'actions_planned') {
+                  console.log('[handleSkillComplete] Actions planned:', event.actions)
+                  pendingActions.value = event.actions || []
+
+                } else if (event.type === 'action_pending') {
+                  console.log('[handleSkillComplete] Action pending:', event.index, event.action)
+                  currentActionIndex.value = event.index || 0
+                  skillPanelProcessing.value = false
+
+                  const action = event.action
+                  let actionDesc = ''
+                  if (action?.type === 'write') {
+                    actionDesc = `📝 **写入文件**: ${action.data?.file || 'unknown'}`
+                  } else if (action?.type === 'run') {
+                    actionDesc = `▶️ **执行命令**: \`${action.data?.command || 'unknown'}\``
+                  } else if (action?.type === 'generate') {
+                    actionDesc = `🔧 **生成内容**: ${action.data?.type || 'unknown'}`
+                  }
+                  skillPanelSummary.value = `${actionDesc}\n\n(${(event.index || 0) + 1}/${event.total || 1})`
+
+                  if (autoExecuteAll.value) {
+                    skillPanelMessages.value.push({
+                      id: Date.now(),
+                      role: 'user',
+                      content: `✓ 自动执行: ${actionDesc.replace(/\*\*/g, '')}`,
+                      timestamp: new Date()
+                    })
+                    scrollSkillPanelToBottom()
+                    setTimeout(() => callSkillChatStream('execute'), 100)
+                  } else {
+                    actionPending.value = true
+                    skillPanelWaitingConfirm.value = true
+                  }
+
+                } else if (event.type === 'action_executing') {
+                  actionPending.value = false
+                  skillPanelWaitingConfirm.value = false
+                  skillPanelMessages.value.push({
+                    id: Date.now(),
+                    role: 'assistant',
+                    content: `⏳ 正在执行步骤 ${(event.index || 0) + 1}...`,
+                    timestamp: new Date(),
+                    isExecuting: true
+                  })
+                  scrollSkillPanelToBottom()
+
+                } else if (event.type === 'action_result') {
+                  const lastMsg = skillPanelMessages.value[skillPanelMessages.value.length - 1]
+                  if (lastMsg?.isExecuting) {
+                    lastMsg.isExecuting = false
+                    lastMsg.content = event.success
+                      ? `✅ 步骤 ${(event.index || 0) + 1} 完成: ${event.output || '成功'}`
+                      : `❌ 步骤 ${(event.index || 0) + 1} 失败: ${event.output || '未知错误'}`
+                  }
+                  if (event.output_file) {
+                    step.outputFile = {
+                      type: event.output_file.type as OutputFile['type'],
+                      name: event.output_file.name,
+                      url: event.output_file.url,
+                      size: event.output_file.size?.toString()
+                    }
+                  }
+                  scrollSkillPanelToBottom()
+
+                } else if (event.type === 'action_skipped') {
+                  skillPanelMessages.value.push({
+                    id: Date.now(),
+                    role: 'assistant',
+                    content: `⏭️ 已跳过步骤 ${(event.index || 0) + 1}`,
+                    timestamp: new Date()
+                  })
+                  scrollSkillPanelToBottom()
+
+                } else if (event.type === 'all_actions_done') {
+                  actionPending.value = false
+                  skillPanelWaitingConfirm.value = false
+                  pendingActions.value = []
+                  skillPanelMessages.value.push({
+                    id: Date.now(),
+                    role: 'assistant',
+                    content: '🎉 所有步骤执行完成！',
+                    timestamp: new Date()
+                  })
+                  step.status = 'completed'
+                  step.output = '执行完成'
+                  skillPanelComplete.value = true
+                  setTimeout(() => closeSkillExecution(false), 1500)
+
+                } else if (event.type === 'done') {
+                  // 如果没有 actions，说明 AI 没有规划操作，回退到旧模式
+                  if (pendingActions.value.length === 0) {
+                    console.log('[handleSkillComplete] No actions, falling back to direct execute')
+                    skillPanelProcessing.value = false
+                    // 显示完成，但提示需要手动操作
+                    skillPanelMessages.value.push({
+                      id: Date.now(),
+                      role: 'assistant',
+                      content: '已完成分析。如需生成文件，请根据上述内容手动操作。',
+                      timestamp: new Date()
+                    })
+                  }
+
+                } else if (event.type === 'error') {
+                  skillPanelProcessing.value = false
+                  skillPanelMessages.value.push({
+                    id: Date.now(),
+                    role: 'assistant',
+                    content: `❌ 错误: ${event.message}`,
+                    timestamp: new Date()
+                  })
+                  step.status = 'error'
+                  step.output = event.message || '执行失败'
+                }
+              }
+            } catch (error: any) {
+              console.error('[handleSkillComplete] Stream error:', error)
+              skillPanelProcessing.value = false
+              // 回退到旧的执行方式
+              const response = await agentApi.execute({
+                skill_id: step.skillId,
+                params
+              })
+              if (response.success) {
+                step.status = 'completed'
+                step.output = response.output || `✓ ${step.description} 完成`
+                if (response.output_file) {
+                  step.outputFile = {
+                    type: response.output_file.type as OutputFile['type'],
+                    name: response.output_file.name,
+                    url: response.output_file.url,
+                    size: response.output_file.size
+                  }
+                }
+                closeSkillExecution(false)
+              } else {
+                step.status = 'error'
+                step.output = response.error || '执行失败'
+              }
+            }
+
+            // 跳过后续的旧代码逻辑
+            return
+
+            // ========== 以下是旧的执行逻辑（已被跳过）==========
             const response = await agentApi.execute({
               skill_id: step.skillId,
               params
@@ -2251,9 +2864,16 @@ const lastUserQuery = computed(() => {
 
 // 获取最近用户消息中的文件路径（用于传递给技能执行）
 const getContextFilePaths = (): string[] => {
+  console.log('[getContextFilePaths] 开始查找文件路径...')
   for (let i = messages.value.length - 1; i >= 0; i--) {
     const msg = messages.value[i]
     if (msg && msg.type === 'user') {
+      console.log(`[getContextFilePaths] 检查用户消息 ${i}:`, {
+        hasAttachments: !!msg.attachments?.length,
+        attachments: msg.attachments?.map(a => ({ name: a.name, serverPath: a.serverPath })),
+        hasInlineRefs: !!msg.inlineRefs?.length,
+        inlineRefs: msg.inlineRefs?.map(a => ({ name: a.name, serverPath: a.serverPath }))
+      })
       const paths: string[] = []
       // 从上传的附件获取
       if (msg.attachments?.length) {
@@ -2264,10 +2884,12 @@ const getContextFilePaths = (): string[] => {
         paths.push(...msg.inlineRefs.filter(a => a.serverPath).map(a => a.serverPath!))
       }
       if (paths.length > 0) {
+        console.log('[getContextFilePaths] 找到文件路径:', paths)
         return paths
       }
     }
   }
+  console.log('[getContextFilePaths] 未找到任何文件路径')
   return []
 }
 
@@ -3064,6 +3686,13 @@ const executeSkillsParallel = async (messageId: number) => {
   const remaining = new Set(steps.filter(s => s.nodeId).map(s => s.nodeId!))
 
   while (remaining.size > 0) {
+    // 检查是否请求停止
+    if (isStopRequested.value) {
+      console.log('[executeSkillsParallel] 检测到停止请求，终止执行')
+      isProcessing.value = false
+      return
+    }
+
     // 检查是否暂停
     if (isPaused.value) {
       pausedMessageId.value = messageId
@@ -3117,6 +3746,20 @@ const executeSkillsParallel = async (messageId: number) => {
       // 并行执行技能（调用真实 API）
       await Promise.all(currentBatch.map(async (step) => {
       try {
+        // 检查是否请求停止
+        if (isStopRequested.value) {
+          console.log(`[Skill Parallel] 检测到停止请求，跳过 "${step.skillName}"`)
+          return
+        }
+
+        // 检查步骤是否仍存在于 skillPlan 中（可能被用户删除了）
+        const currentMsg = messages.value.find(m => m.id === messageId)
+        const stepStillExists = currentMsg?.skillPlan?.some(s => s.id === step.id)
+        if (!stepStillExists) {
+          console.log(`[Skill Parallel] 步骤 "${step.skillName}" 已被删除，跳过执行`)
+          return
+        }
+
         if (step.skillId) {
           // 构建参数：包含用户输入、原始上下文和文件路径
           const filePaths = getContextFilePaths()
@@ -3246,6 +3889,353 @@ const executeSkillsParallel = async (messageId: number) => {
 
           console.log(`[Skill Parallel] Executing "${step.skillName}" with params:`, params)
 
+          // ========== Claude Code 风格：使用交互式执行 ==========
+          // 打开右侧面板进行交互式执行
+          executingSkill.value = { name: step.skillName, icon: step.skillIcon, description: step.description }
+          executionContext.value = contextValue
+          executingStepInfo.value = { messageId, stepId: step.id }
+
+          // 初始化面板状态
+          skillPanelMessages.value = [{
+            id: Date.now(),
+            role: 'assistant',
+            content: `🚀 正在执行 **${step.skillName}**...\n\n${step.description || ''}`,
+            timestamp: new Date()
+          }]
+          skillPanelInput.value = ''
+          skillPanelProcessing.value = true
+          skillPanelComplete.value = false
+          skillPanelWaitingConfirm.value = false
+          skillChatConversation.value = []
+          pendingActions.value = []
+          currentActionIndex.value = 0
+          actionPending.value = false
+          autoExecuteAll.value = false
+          panelCollectedFilePaths.value = allFilePaths
+
+          showSkillExecution.value = true
+          scrollSkillPanelToBottom()
+
+          // ========== 真正的 Claude Code 风格：多轮 AI 交互 ==========
+          // 每个工具调用都等待用户确认
+
+          // 标记 Agent Loop 开始
+          isAgentLoopRunning.value = true
+
+          // 使用 Promise 保持等待状态，直到任务完成
+          await new Promise<void>((resolve, reject) => {
+            let lastOutputFile: OutputFile | null = null
+            let conversation: AgentLoopMessage[] = []
+            let pendingToolCall: ToolCall | null = null
+            let isCompleted = false
+
+            // Agent 循环函数
+            const runAgentLoop = async (
+              toolConfirmed: boolean = false,
+              toolRejected: boolean = false,
+              userEdit?: string
+            ): Promise<void> => {
+              if (isCompleted) return
+
+              const request: AgentLoopRequest = {
+                skill_id: step.skillId || '',
+                context: contextValue,
+                file_paths: allFilePaths.length > 0 ? allFilePaths : undefined,
+                conversation: conversation,
+                pending_tool_call: pendingToolCall || undefined,
+                tool_confirmed: toolConfirmed,
+                tool_rejected: toolRejected,
+                user_edit: userEdit
+              }
+
+              skillPanelProcessing.value = true
+
+              try {
+                // 检查是否请求停止
+                if (isStopRequested.value) {
+                  console.log('[Agent Loop] 检测到停止请求，终止')
+                  isCompleted = true
+                  resolve()
+                  return
+                }
+
+                console.log('[Agent Loop] 发送请求:', JSON.stringify(request, null, 2).substring(0, 500))
+                for await (const event of agentLoopApi.loop(request)) {
+                  // 每次收到事件都检查停止标志
+                  if (isStopRequested.value) {
+                    console.log('[Agent Loop] 检测到停止请求，中止循环')
+                    isCompleted = true
+                    resolve()
+                    return
+                  }
+
+                  console.log('[Agent Loop] 收到事件:', event.type, event)
+
+                  if (event.type === 'thinking') {
+                    // AI 正在思考
+                    skillPanelMessages.value.push({
+                      id: Date.now(),
+                      role: 'assistant',
+                      content: event.message || '● AI 正在思考...',
+                      timestamp: new Date(),
+                      isExecuting: true
+                    })
+                    scrollSkillPanelToBottom()
+
+                  } else if (event.type === 'message') {
+                    // AI 的文字消息
+                    const lastMsg = skillPanelMessages.value[skillPanelMessages.value.length - 1]
+                    if (lastMsg?.isExecuting) {
+                      lastMsg.isExecuting = false
+                      lastMsg.content = event.content || ''
+                    } else {
+                      skillPanelMessages.value.push({
+                        id: Date.now(),
+                        role: 'assistant',
+                        content: event.content || '',
+                        timestamp: new Date()
+                      })
+                    }
+                    // 保存到对话历史
+                    conversation.push({ role: 'assistant', content: event.content || '' })
+                    scrollSkillPanelToBottom()
+
+                  } else if (event.type === 'tool_call') {
+                    // AI 要调用工具，等待用户确认
+                    const lastMsg = skillPanelMessages.value[skillPanelMessages.value.length - 1]
+                    if (lastMsg?.isExecuting) {
+                      lastMsg.isExecuting = false
+                    }
+
+                    // 保存待确认的工具调用
+                    pendingToolCall = {
+                      tool: event.tool || '',
+                      params: event.params || {},
+                      display_name: event.display_name,
+                      preview: event.preview
+                    }
+
+                    // 显示工具调用确认
+                    skillPanelMessages.value.push({
+                      id: Date.now(),
+                      role: 'assistant',
+                      content: event.message || `● **${event.display_name}**\n  ⎿  等待确认...`,
+                      timestamp: new Date(),
+                      toolCall: pendingToolCall,
+                      waitingConfirm: true
+                    })
+                    skillPanelProcessing.value = false
+                    scrollSkillPanelToBottom()
+                    // 不 resolve，等待用户确认后继续
+                    return
+
+                  } else if (event.type === 'tool_executing') {
+                    // 工具执行中
+                    skillPanelMessages.value.push({
+                      id: Date.now(),
+                      role: 'assistant',
+                      content: event.message || '执行中...',
+                      timestamp: new Date(),
+                      isExecuting: true
+                    })
+                    scrollSkillPanelToBottom()
+
+                  } else if (event.type === 'tool_result') {
+                    // 工具执行结果
+                    const lastMsg = skillPanelMessages.value[skillPanelMessages.value.length - 1]
+                    if (lastMsg?.isExecuting) {
+                      lastMsg.isExecuting = false
+                      lastMsg.content = event.message || (event.success ? '完成' : '失败')
+                    }
+
+                    // 保存输出文件
+                    if (event.output_file) {
+                      console.log('[Agent Loop] 收到 output_file:', event.output_file)
+                      lastOutputFile = {
+                        type: event.output_file.type as OutputFile['type'],
+                        name: event.output_file.name,
+                        url: event.output_file.url,
+                        size: event.output_file.size?.toString()
+                      }
+                      step.outputFile = lastOutputFile
+                      console.log('[Agent Loop] 设置 lastOutputFile:', lastOutputFile)
+                    }
+
+                    // 保存到对话历史
+                    conversation.push({
+                      role: 'tool_result',
+                      content: JSON.stringify({ success: event.success, output: event.output })
+                    })
+
+                    // 清除待确认的工具调用
+                    pendingToolCall = null
+                    scrollSkillPanelToBottom()
+
+                  } else if (event.type === 'done') {
+                    // 任务完成
+                    isCompleted = true
+                    isAgentLoopRunning.value = false  // 允许关闭面板
+                    skillPanelProcessing.value = false
+                    skillPanelMessages.value.push({
+                      id: Date.now(),
+                      role: 'assistant',
+                      content: '🎉 任务完成！',
+                      timestamp: new Date()
+                    })
+
+                    // 更新主对话框中的步骤状态
+                    console.log('[Agent Loop] done 事件, lastOutputFile:', lastOutputFile)
+                    console.log('[Agent Loop] executingStepInfo:', executingStepInfo.value)
+                    step.status = 'completed'
+                    step.output = '执行完成'
+                    if (lastOutputFile) {
+                      step.outputFile = lastOutputFile
+                    }
+                    skillPanelComplete.value = true
+
+                    // 强制更新 Vue 响应式 - 使用新对象触发变更检测
+                    if (executingStepInfo.value) {
+                      const { messageId, stepId } = executingStepInfo.value
+                      const msgIndex = messages.value.findIndex(m => m.id === messageId)
+                      console.log('[Agent Loop] 更新消息, msgIndex:', msgIndex, 'messageId:', messageId, 'stepId:', stepId)
+                      if (msgIndex >= 0) {
+                        const msg = messages.value[msgIndex]
+                        if (msg?.skillPlan) {
+                          const updatedSkillPlan = msg.skillPlan.map(s => {
+                            if (s.id === stepId) {
+                              console.log('[Agent Loop] 更新步骤状态为 completed, outputFile:', lastOutputFile)
+                              return {
+                                ...s,
+                                status: 'completed' as const,
+                                output: '执行完成',
+                                outputFile: lastOutputFile || s.outputFile
+                              }
+                            }
+                            return s
+                          })
+                          // 替换整个消息对象以触发 Vue 响应式
+                          messages.value[msgIndex] = {
+                            ...msg,
+                            skillPlan: updatedSkillPlan
+                          }
+                          console.log('[Agent Loop] 消息更新完成')
+                        }
+                      }
+                    }
+
+                    // 如果有输出文件，打开预览
+                    if (lastOutputFile) {
+                      openOutputFile(lastOutputFile)
+                    }
+                    scrollSkillPanelToBottom()
+
+                    // 延迟关闭面板，让用户看到完成状态
+                    setTimeout(() => {
+                      resolve()
+                    }, 2000)
+                    return
+
+                  } else if (event.type === 'error') {
+                    // 错误
+                    isCompleted = true
+                    isAgentLoopRunning.value = false  // 允许关闭面板
+                    skillPanelProcessing.value = false
+                    const lastMsg = skillPanelMessages.value[skillPanelMessages.value.length - 1]
+                    if (lastMsg?.isExecuting) {
+                      lastMsg.isExecuting = false
+                    }
+                    skillPanelMessages.value.push({
+                      id: Date.now(),
+                      role: 'assistant',
+                      content: `❌ ${event.message}`,
+                      timestamp: new Date()
+                    })
+                    step.status = 'error'
+                    step.output = event.message || '执行失败'
+
+                    // 强制更新 Vue 响应式 - 使用新对象触发变更检测
+                    if (executingStepInfo.value) {
+                      const { messageId, stepId } = executingStepInfo.value
+                      const msgIndex = messages.value.findIndex(m => m.id === messageId)
+                      if (msgIndex >= 0) {
+                        const msg = messages.value[msgIndex]
+                        if (msg?.skillPlan) {
+                          const updatedSkillPlan = msg.skillPlan.map(s => {
+                            if (s.id === stepId) {
+                              return {
+                                ...s,
+                                status: 'error' as const,
+                                output: event.message || '执行失败'
+                              }
+                            }
+                            return s
+                          })
+                          messages.value[msgIndex] = {
+                            ...msg,
+                            skillPlan: updatedSkillPlan
+                          }
+                        }
+                      }
+                    }
+
+                    scrollSkillPanelToBottom()
+                    reject(new Error(event.message))  // 错误 Promise
+                    return
+                  }
+                }
+              } catch (error) {
+                console.error('[Agent Loop] Error:', error)
+                reject(error)
+              }
+            }
+
+            // 确认工具调用
+            const confirmTool = async () => {
+              try {
+                // 更新消息状态
+                const lastMsg = skillPanelMessages.value[skillPanelMessages.value.length - 1]
+                if (lastMsg?.waitingConfirm) {
+                  lastMsg.waitingConfirm = false
+                  lastMsg.content = lastMsg.content?.replace('等待确认...', '已确认') || '已确认'
+                }
+                console.log('[Agent Loop] 用户确认，继续执行...')
+                await runAgentLoop(true, false)
+              } catch (error) {
+                console.error('[Agent Loop] confirmTool error:', error)
+                // 不 reject，让用户可以重试
+              }
+            }
+
+            // 拒绝工具调用
+            const rejectTool = async () => {
+              try {
+                const lastMsg = skillPanelMessages.value[skillPanelMessages.value.length - 1]
+                if (lastMsg?.waitingConfirm) {
+                  lastMsg.waitingConfirm = false
+                  lastMsg.content = lastMsg.content?.replace('等待确认...', '已跳过') || '已跳过'
+                }
+                console.log('[Agent Loop] 用户拒绝，继续执行...')
+                await runAgentLoop(false, true)
+              } catch (error) {
+                console.error('[Agent Loop] rejectTool error:', error)
+              }
+            }
+
+            // 保存确认/拒绝函数到全局，供模板使用
+            ;(window as any).__agentLoopConfirm = confirmTool
+            ;(window as any).__agentLoopReject = rejectTool
+
+            // 开始 Agent 循环
+            runAgentLoop().catch(err => {
+              console.error('[Agent Loop] Initial runAgentLoop error:', err)
+              // 不 reject，避免面板关闭
+            })
+          })
+
+          // 跳过后面的旧代码
+          return
+
+          // ========== 以下是旧的执行逻辑（已被跳过）==========
           const response = await agentApi.execute({
             skill_id: step.skillId,
             params
@@ -4360,6 +5350,12 @@ const downloadCurrentFile = async () => {
     window.open(fullUrl, '_blank')
   }
 }
+
+// 在新标签页中打开文件
+const openInNewTab = (url: string) => {
+  const fullUrl = url.startsWith('http') ? url : `${config.serverBaseUrl}${url}`
+  window.open(fullUrl, '_blank')
+}
 </script>
 
 <template>
@@ -5168,6 +6164,77 @@ const downloadCurrentFile = async () => {
             <pre class="preview-code" :class="previewData.format">{{ previewData.content }}</pre>
           </div>
 
+          <!-- PPT 预览 -->
+          <div v-else-if="previewData?.type === 'ppt'" class="preview-office-container">
+            <div class="office-preview-card">
+              <div class="office-icon ppt-icon">
+                <svg viewBox="0 0 48 48" fill="none">
+                  <rect x="6" y="4" width="36" height="40" rx="4" fill="#D24726"/>
+                  <rect x="10" y="12" width="28" height="24" rx="2" fill="white"/>
+                  <text x="24" y="28" text-anchor="middle" fill="#D24726" font-size="10" font-weight="bold">PPT</text>
+                </svg>
+              </div>
+              <div class="office-info">
+                <div class="office-file-name">{{ previewData.fileName }}</div>
+                <div class="office-file-size">{{ formatFileSize(previewData.fileSize) }}</div>
+              </div>
+              <div class="office-actions">
+                <button class="office-btn primary" @click="downloadCurrentFile">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+                  </svg>
+                  下载
+                </button>
+                <button class="office-btn" @click="openInNewTab(previewData.url)">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/>
+                  </svg>
+                  打开
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Word 预览 -->
+          <div v-else-if="previewData?.type === 'word'" class="preview-office-container">
+            <div class="office-preview-card">
+              <div class="office-icon word-icon">
+                <svg viewBox="0 0 48 48" fill="none">
+                  <rect x="6" y="4" width="36" height="40" rx="4" fill="#2B579A"/>
+                  <rect x="10" y="12" width="28" height="24" rx="2" fill="white"/>
+                  <text x="24" y="28" text-anchor="middle" fill="#2B579A" font-size="10" font-weight="bold">DOC</text>
+                </svg>
+              </div>
+              <div class="office-info">
+                <div class="office-file-name">{{ previewData.fileName }}</div>
+                <div class="office-file-size">{{ formatFileSize(previewData.fileSize) }}</div>
+              </div>
+              <div class="office-actions">
+                <button class="office-btn primary" @click="downloadCurrentFile">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+                  </svg>
+                  下载
+                </button>
+                <button class="office-btn" @click="openInNewTab(previewData.url)">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/>
+                  </svg>
+                  打开
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- PDF 预览 -->
+          <div v-else-if="previewData?.type === 'pdf'" class="preview-pdf-container">
+            <iframe
+              :src="config.serverBaseUrl + previewData.url"
+              class="pdf-iframe"
+              frameborder="0"
+            ></iframe>
+          </div>
+
           <!-- 其他文件 -->
           <div v-else-if="previewData?.type === 'file'" class="preview-file-info">
             <div class="file-info-icon">{{ currentPreviewFile ? getFileTypeInfo(currentPreviewFile.type).icon : '📄' }}</div>
@@ -5264,6 +6331,30 @@ const downloadCurrentFile = async () => {
                 </Transition>
               </div>
             </div>
+            <!-- 面板操作按钮 -->
+            <div class="panel-header-actions">
+              <!-- 停止按钮（运行中显示） -->
+              <button
+                v-if="skillPanelProcessing || isAgentLoopRunning"
+                class="panel-action-btn stop-btn"
+                @click.stop="stopAllExecution"
+                title="停止执行"
+              >
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="6" y="6" width="12" height="12" rx="2"/>
+                </svg>
+              </button>
+              <!-- 关闭按钮 -->
+              <button
+                class="panel-action-btn close-btn"
+                @click.stop="closeSkillExecution(false)"
+                title="关闭面板"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M18 6L6 18M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
           </header>
 
           <!-- 对话区域（支持拖拽上传） -->
@@ -5302,6 +6393,22 @@ const downloadCurrentFile = async () => {
                     <div v-if="msg.content" class="panel-bubble-text" v-html="renderPanelMarkdown(msg.content)"></div>
                     <div v-else class="panel-typing">
                       <span></span><span></span><span></span>
+                    </div>
+                    <!-- 工具调用确认按钮 -->
+                    <div v-if="msg.waitingConfirm" class="tool-confirm-buttons">
+                      <button class="tool-btn confirm" @click.stop.prevent="handleToolConfirm">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                        Yes
+                      </button>
+                      <button class="tool-btn reject" @click.stop.prevent="handleToolReject">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <line x1="18" y1="6" x2="6" y2="18"></line>
+                          <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                        No
+                      </button>
                     </div>
                   </div>
                 </template>
@@ -5343,29 +6450,65 @@ const downloadCurrentFile = async () => {
                 <span class="complete-text">执行完成，即将返回...</span>
               </div>
 
-              <!-- 等待确认状态 -->
+              <!-- 等待确认状态 - Claude Code 风格操作确认 -->
               <div v-else-if="skillPanelWaitingConfirm" key="confirm" class="panel-confirm-area">
-                <div class="confirm-hint">请确认以上信息是否正确</div>
-                <div class="confirm-actions">
-                  <button class="confirm-btn primary" @click="confirmExecuteSkill">
-                    <svg viewBox="0 0 24 24" fill="none">
-                      <path d="M5 12l5 5L20 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                    确认执行
-                  </button>
-                  <button class="confirm-btn secondary" @click="continueAddDetails">
-                    <svg viewBox="0 0 24 24" fill="none">
-                      <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                    </svg>
-                    继续补充
-                  </button>
-                  <button class="confirm-btn cancel" @click="cancelSkillExecution">
-                    <svg viewBox="0 0 24 24" fill="none">
-                      <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                    </svg>
-                    取消
-                  </button>
-                </div>
+                <!-- 操作确认（系统级工具调用确认） -->
+                <template v-if="actionPending && (pendingActions.length > 0 || interactiveResolve)">
+                  <div class="confirm-hint action-hint">
+                    <div class="action-summary" v-html="skillPanelSummary.replace(/\n/g, '<br>')"></div>
+                  </div>
+                  <div class="confirm-actions">
+                    <button class="confirm-btn primary" @click="confirmExecuteSkill">
+                      <svg viewBox="0 0 24 24" fill="none">
+                        <path d="M5 12l5 5L20 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                      执行
+                    </button>
+                    <button class="confirm-btn primary all" @click="executeAllActions" v-if="pendingActions.length > 1 || interactiveResolve">
+                      <svg viewBox="0 0 24 24" fill="none">
+                        <path d="M4 12l4 4 6-8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M10 12l4 4 6-8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                      全部执行
+                    </button>
+                    <button class="confirm-btn secondary" @click="skipCurrentAction">
+                      <svg viewBox="0 0 24 24" fill="none">
+                        <path d="M13 5l7 7-7 7M6 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                      跳过
+                    </button>
+                    <button class="confirm-btn cancel" @click="cancelSkillExecution">
+                      <svg viewBox="0 0 24 24" fill="none">
+                        <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                      </svg>
+                      取消
+                    </button>
+                  </div>
+                </template>
+                <!-- 普通确认（无操作时的旧模式） -->
+                <template v-else>
+                  <div class="confirm-hint">{{ skillPanelSummary || '请确认以上信息是否正确' }}</div>
+                  <div class="confirm-actions">
+                    <button class="confirm-btn primary" @click="confirmExecuteSkill">
+                      <svg viewBox="0 0 24 24" fill="none">
+                        <path d="M5 12l5 5L20 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                      确认执行
+                    </button>
+                    <button class="confirm-btn secondary" @click="continueAddDetails">
+                      <svg viewBox="0 0 24 24" fill="none">
+                        <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                      </svg>
+                      继续补充
+                    </button>
+                    <button class="confirm-btn cancel" @click="cancelSkillExecution">
+                      <svg viewBox="0 0 24 24" fill="none">
+                        <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                      </svg>
+                      取消
+                    </button>
+                  </div>
+                </template>
               </div>
 
               <!-- 输入状态 -->
@@ -8647,6 +9790,48 @@ const downloadCurrentFile = async () => {
   50% { opacity: 0.5; transform: scale(0.8); }
 }
 
+/* 面板头部操作按钮 */
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.panel-action-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.panel-action-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.panel-action-btn.stop-btn {
+  color: #ef4444;
+}
+
+.panel-action-btn.stop-btn:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.panel-action-btn.close-btn {
+  color: #64748b;
+}
+
+.panel-action-btn.close-btn:hover {
+  background: rgba(100, 116, 139, 0.1);
+  color: #334155;
+}
+
 /* 对话区域 */
 .panel-chat-area {
   flex: 1;
@@ -8699,6 +9884,20 @@ const downloadCurrentFile = async () => {
   border-bottom-left-radius: 4px;
 }
 
+/* 执行中状态 - 显示加载动画 */
+.panel-message.is-executing .panel-msg-bubble::after {
+  content: '';
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-left: 8px;
+  border: 2px solid #8b5cf6;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  vertical-align: middle;
+}
+
 .panel-msg-bubble.user {
   background: linear-gradient(145deg, #8b5cf6 0%, #7c3aed 100%);
   color: #fff;
@@ -8741,6 +9940,56 @@ const downloadCurrentFile = async () => {
 @keyframes typingBounce {
   0%, 60%, 100% { transform: translateY(0); }
   30% { transform: translateY(-5px); }
+}
+
+/* 工具调用确认按钮 */
+.tool-confirm-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tool-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.tool-btn.confirm {
+  background: linear-gradient(145deg, #10b981 0%, #059669 100%);
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.25);
+}
+
+.tool-btn.confirm:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.35);
+}
+
+.tool-btn.reject {
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+}
+
+.tool-btn.reject:hover {
+  background: #fee2e2;
+  color: #ef4444;
+  border-color: #fecaca;
 }
 
 /* 系统消息 */
@@ -9107,6 +10356,37 @@ const downloadCurrentFile = async () => {
 .confirm-btn.primary:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+}
+
+.confirm-btn.primary.all {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  flex: 1.2;
+}
+
+.confirm-btn.primary.all:hover {
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+}
+
+.action-hint {
+  text-align: left;
+}
+
+.action-summary {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #1e293b;
+  padding: 8px 12px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border-left: 3px solid #8b5cf6;
+}
+
+.action-summary code {
+  background: #e2e8f0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 12px;
 }
 
 .confirm-btn.secondary {
@@ -9564,6 +10844,113 @@ const downloadCurrentFile = async () => {
   object-fit: contain;
   border-radius: 4px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+/* Office 文件预览 (PPT, Word) */
+.preview-office-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+}
+
+.office-preview-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 32px 48px;
+  background: linear-gradient(145deg, #ffffff 0%, #f8fafc 100%);
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.office-icon {
+  width: 80px;
+  height: 80px;
+}
+
+.office-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.office-info {
+  text-align: center;
+}
+
+.office-file-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 4px;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.office-file-size {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.office-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.office-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: white;
+  color: #475569;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.office-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.office-btn:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.office-btn.primary {
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  border-color: transparent;
+  color: white;
+}
+
+.office-btn.primary:hover {
+  background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+}
+
+/* PDF 预览 */
+.preview-pdf-container {
+  height: 100%;
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.pdf-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
 }
 
 /* 文件信息预览 */
