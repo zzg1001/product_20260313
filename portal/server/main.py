@@ -6,7 +6,7 @@ from pathlib import Path
 from database import init_db
 # 导入 models 确保表被创建
 import models  # noqa: F401
-from routers import skills_router, workflows_router, agent_router, executions_router, data_notes_router
+from routers import skills_router, workflows_router, agent_router, executions_router, data_notes_router, chat_router
 from routers.favorites import router as favorites_router
 from routers.logs import router as logs_router, setup_log_handler, sys_ready
 
@@ -51,6 +51,7 @@ app.include_router(executions_router)
 app.include_router(favorites_router)
 app.include_router(data_notes_router)
 app.include_router(logs_router)
+app.include_router(chat_router)
 
 # 静态文件服务 - 输出文件下载
 app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")

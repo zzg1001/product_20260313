@@ -301,10 +301,18 @@ export interface ChatMessage {
   content: string
 }
 
+// 上下文项
+export interface ContextItem {
+  type: string
+  name: string
+  content: string
+}
+
 export interface ChatRequest {
   message: string
   history?: ChatMessage[]
   skill_ids?: string[]  // UUID array
+  context?: ContextItem[]  // 上下文项列表
 }
 
 export interface ChatResponse {
@@ -970,6 +978,108 @@ export const dataNotesApi = {
     ),
 }
 
+// ============ Chat Sessions API ============
+
+export interface ChatSessionMessage {
+  id: string
+  session_id: string
+  role: 'user' | 'agent'
+  content: string
+  metadata?: {
+    skill_plan?: any[]
+    pipeline_edges?: any[]
+    attachments?: any[]
+  }
+  created_at?: string
+}
+
+export interface ChatSession {
+  id: string
+  user_id: string
+  title: string | null
+  message_count: number
+  skill_names?: string[] | null  // 涉及的技能名称
+  last_message_at: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+export interface ChatSessionWithMessages extends ChatSession {
+  messages: ChatSessionMessage[]
+}
+
+export interface ChatSessionListResponse {
+  sessions: ChatSession[]
+  total: number
+}
+
+export interface CreateMessageRequest {
+  role: 'user' | 'agent'
+  content: string
+  metadata?: {
+    skill_plan?: any[]
+    pipeline_edges?: any[]
+    attachments?: any[]
+  }
+  created_at?: string  // ISO 时间戳
+}
+
+export const chatSessionsApi = {
+  // 获取会话列表
+  list: (page: number = 1, pageSize: number = 20, q?: string) => {
+    const params = new URLSearchParams()
+    params.append('page', page.toString())
+    params.append('page_size', pageSize.toString())
+    if (q) params.append('q', q)
+    return request<ChatSessionListResponse>(`/sessions?${params}`, {
+      headers: { 'X-User-ID': getUserId() }
+    })
+  },
+
+  // 创建新会话
+  create: (title?: string) =>
+    request<ChatSession>('/sessions', {
+      method: 'POST',
+      headers: { 'X-User-ID': getUserId() },
+      body: JSON.stringify({ title }),
+    }),
+
+  // 获取会话详情（含消息）
+  get: (id: string) =>
+    request<ChatSessionWithMessages>(`/sessions/${id}`, {
+      headers: { 'X-User-ID': getUserId() }
+    }),
+
+  // 更新会话（重命名）
+  update: (id: string, title: string) =>
+    request<ChatSession>(`/sessions/${id}`, {
+      method: 'PUT',
+      headers: { 'X-User-ID': getUserId() },
+      body: JSON.stringify({ title }),
+    }),
+
+  // 删除会话
+  delete: (id: string) =>
+    request<{ message: string }>(`/sessions/${id}`, {
+      method: 'DELETE',
+      headers: { 'X-User-ID': getUserId() },
+    }),
+
+  // 添加消息
+  addMessage: (sessionId: string, data: CreateMessageRequest) =>
+    request<ChatSessionMessage>(`/sessions/${sessionId}/messages`, {
+      method: 'POST',
+      headers: { 'X-User-ID': getUserId() },
+      body: JSON.stringify(data),
+    }),
+
+  // 获取消息列表
+  getMessages: (sessionId: string, limit: number = 100) =>
+    request<ChatSessionMessage[]>(`/sessions/${sessionId}/messages?limit=${limit}`, {
+      headers: { 'X-User-ID': getUserId() }
+    }),
+}
+
 // Export all APIs
 export default {
   skills: skillsApi,
@@ -978,4 +1088,5 @@ export default {
   executions: executionsApi,
   favorites: favoritesApi,
   dataNotes: dataNotesApi,
+  chatSessions: chatSessionsApi,
 }

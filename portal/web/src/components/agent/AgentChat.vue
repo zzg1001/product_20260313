@@ -4,6 +4,10 @@ import { useRoute } from 'vue-router'
 import { agentApi, dataNotesApi, type ChatMessage, type DataNote } from '@/api'
 import config from '@/config'
 import SlashCommandPopup from './SlashCommandPopup.vue'
+import ChatHistory from './ChatHistory.vue'
+import { useContextStore } from '@/stores/context'
+import { ContextPicker } from './context'
+import { chatSessionsApi, type ChatSession, type ChatSessionMessage } from '@/api'
 
 // 输出文件类型
 interface OutputFile {
@@ -111,6 +115,21 @@ const emit = defineEmits<{
   gotoSkills: [skillName: string, mode: 'create' | 'upload']
   saveWorkflow: [workflow: { name: string; description: string; nodes: any[]; edges: any[] }]
 }>()
+
+// 上下文管理
+const contextStore = useContextStore()
+
+// @ 引用选择器状态
+const showAtPicker = ref(false)
+const atQuery = ref('')
+const atPickerPosition = ref({ x: 0, y: 100 })
+
+// 侧边栏 Tab 切换：history / pipeline
+const sidebarTab = ref<'history' | 'pipeline'>('pipeline')
+
+// 会话管理
+const currentSessionId = ref<string | null>(null)
+const chatHistoryRef = ref<InstanceType<typeof ChatHistory> | null>(null)
 
 const messages = ref<Message[]>([
   {
@@ -332,6 +351,28 @@ const isFileSaved = (url: string) => savedFiles.value.has(url)
 
 // 检测 "/" 命令输入
 const handleInputKeydown = (e: KeyboardEvent) => {
+  // 处理 "@" 引用的键盘导航
+  if (showAtPicker.value) {
+    const navKeys = ['ArrowUp', 'ArrowDown', 'Enter', 'Escape', 'Backspace']
+    if (navKeys.includes(e.key)) {
+      if (e.key === 'Backspace') {
+        if (atQuery.value) {
+          return // 允许删除查询字符
+        } else {
+          closeAtPicker()
+          return
+        }
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        closeAtPicker()
+        return
+      }
+      // ArrowUp, ArrowDown, Enter 由 ContextPicker 组件内部处理
+      return
+    }
+  }
+
   // 处理 "/" 补全的键盘导航
   if (showSlashPopup.value) {
     const navKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace']
@@ -361,9 +402,36 @@ const handleInputKeydown = (e: KeyboardEvent) => {
   }
 }
 
-// 输入框内容变化时检测 "/"
+// 输入框内容变化时检测 "/" 和 "@"
 const handleInputChange = () => {
   const text = inputText.value
+
+  // 检测 "@" 引用
+  const lastAtIndex = text.lastIndexOf('@')
+  if (lastAtIndex >= 0) {
+    const charBefore = lastAtIndex > 0 ? text[lastAtIndex - 1] : ' '
+    if (charBefore === ' ' || charBefore === '\n' || lastAtIndex === 0) {
+      const query = text.slice(lastAtIndex + 1)
+      if (!query.includes(' ') && !query.includes('\n')) {
+        atQuery.value = query
+        showAtPicker.value = true
+        // 计算弹窗位置（在输入框上方）
+        const textarea = document.querySelector('.chat-input textarea')
+        if (textarea) {
+          const rect = textarea.getBoundingClientRect()
+          atPickerPosition.value = { x: rect.left + 10, y: window.innerHeight - rect.top + 10 }
+        }
+        return
+      }
+    }
+  }
+
+  // 关闭 @ 选择器
+  if (showAtPicker.value) {
+    closeAtPicker()
+  }
+
+  // 检测 "/" 命令
   const lastSlashIndex = text.lastIndexOf('/')
 
   if (lastSlashIndex >= 0) {
@@ -459,11 +527,58 @@ const closeSlashPopup = () => {
   showSlashPopup.value = false
 }
 
+// 关闭 "@" 选择器
+const closeAtPicker = () => {
+  showAtPicker.value = false
+  atQuery.value = ''
+}
+
+// 处理 @ 选择
+const handleAtSelect = async (item: { type: string; name: string; content: string; filePath?: string }) => {
+  // 移除输入框中的 "@" 及查询
+  const text = inputText.value
+  const lastAtIndex = text.lastIndexOf('@')
+  if (lastAtIndex >= 0) {
+    inputText.value = text.slice(0, lastAtIndex)
+  }
+
+  // 如果是数据便签且需要加载内容
+  if (item.type === 'data-note' && item.filePath && !item.content) {
+    try {
+      // 从 API 获取文件内容（如果需要）
+      contextStore.addDataNote(item.name, `[引用文件: ${item.filePath}]`, item.filePath)
+    } catch (e) {
+      console.error('Failed to load data note content:', e)
+    }
+  } else if (item.type === 'text-snippet') {
+    contextStore.addTextSnippet(item.name, item.content)
+  } else if (item.type === 'skill-output') {
+    // 技能输出已在 store 中，无需重复添加
+  } else {
+    // 添加到上下文
+    contextStore.addItem({
+      type: item.type as any,
+      name: item.name,
+      content: item.content || `[${item.type}: ${item.name}]`
+    })
+  }
+
+  closeAtPicker()
+}
+
+// 打开上下文面板添加
+const handleAddContext = () => {
+  contextStore.isExpanded = true
+}
+
 // 输入框失去焦点时延迟关闭弹窗（允许点击弹窗中的选项）
 const handleInputBlur = () => {
   blurCloseTimer = window.setTimeout(() => {
     if (showSlashPopup.value) {
       closeSlashPopup()
+    }
+    if (showAtPicker.value) {
+      closeAtPicker()
     }
     blurCloseTimer = null
   }, 300)  // 延迟稍长一点，让级联菜单有时间响应
@@ -498,6 +613,9 @@ const clearConversation = () => {
   uploadedFiles.value = []
   pendingRefs.value = []
 
+  // 清空上下文
+  contextStore.clearAll()
+
   // 重置流程相关状态
   collapsedGroups.value.clear()
   savedGroups.value.clear()
@@ -519,6 +637,114 @@ const clearConversation = () => {
   cleanExecutionMessageId.value = null
 
   scrollToBottom()
+}
+
+// ============ 会话管理 ============
+
+// 开始新对话（不立即创建会话，发送消息时自动创建）
+const startNewConversation = () => {
+  currentSessionId.value = null
+  clearConversation()
+}
+
+// 加载会话
+const loadSession = async (session: ChatSession) => {
+  try {
+    const data = await chatSessionsApi.get(session.id)
+    currentSessionId.value = session.id
+
+    // 转换消息格式
+    messages.value = data.messages.map((msg: ChatSessionMessage) => {
+      // 历史消息中的技能标记为已完成（防止重新执行）
+      const skillPlan = msg.metadata?.skill_plan?.map((s: any) => ({
+        ...s,
+        status: 'completed' as const
+      }))
+      return {
+        id: parseInt(msg.id.replace(/-/g, '').slice(0, 12), 16) || Date.now(),
+        type: msg.role as 'user' | 'agent',
+        content: msg.content,
+        timestamp: new Date(msg.created_at || ''),
+        skillPlan,
+        pipelineEdges: msg.metadata?.pipeline_edges,
+        attachments: msg.metadata?.attachments
+      }
+    })
+
+    // 如果没有消息，添加欢迎消息
+    if (messages.value.length === 0) {
+      messages.value = [{
+        id: Date.now(),
+        type: 'agent',
+        content: '你好！我是 AI Agent，可以帮你编排和执行各种技能来完成复杂任务。试着告诉我你想做什么？',
+        timestamp: new Date()
+      }]
+    }
+
+    // 重置其他状态
+    uploadedFiles.value = []
+    pendingRefs.value = []
+    contextStore.clearAll()
+    collapsedGroups.value.clear()
+    savedGroups.value.clear()
+
+    scrollToBottom()
+  } catch (e) {
+    console.error('Failed to load session:', e)
+  }
+}
+
+// 保存消息到当前会话
+// 会话创建锁，防止并发创建多个会话
+let sessionCreating = false
+let sessionCreatePromise: Promise<void> | null = null
+
+const saveMessageToSession = async (role: 'user' | 'agent', content: string, metadata?: any, timestamp?: Date) => {
+  // 如果正在创建会话，等待完成
+  if (sessionCreating && sessionCreatePromise) {
+    await sessionCreatePromise
+  }
+
+  if (!currentSessionId.value) {
+    // 自动创建会话（加锁）
+    sessionCreating = true
+    sessionCreatePromise = (async () => {
+      try {
+        const session = await chatSessionsApi.create()
+        currentSessionId.value = session.id
+        chatHistoryRef.value?.addSession(session)
+      } catch (e) {
+        console.error('Failed to create session:', e)
+      } finally {
+        sessionCreating = false
+        sessionCreatePromise = null
+      }
+    })()
+    await sessionCreatePromise
+
+    if (!currentSessionId.value) return
+  }
+
+  try {
+    await chatSessionsApi.addMessage(currentSessionId.value, {
+      role,
+      content,
+      metadata,
+      created_at: (timestamp || new Date()).toISOString()
+    })
+    // 刷新历史列表（获取更新后的标题）
+    chatHistoryRef.value?.refresh()
+  } catch (e) {
+    console.error('Failed to save message:', e)
+  }
+}
+
+// 处理会话删除
+const handleSessionDeleted = (sessionId: string) => {
+  if (currentSessionId.value === sessionId) {
+    currentSessionId.value = null
+    clearConversation()
+  }
 }
 
 // 文件上传处理
@@ -1674,6 +1900,15 @@ const handleSkillComplete = async (result: { success: boolean; output?: string; 
                 step.outputFile = generateOutputFile(step.skillName, step.description, step.output)
                 if (step.outputFile) openOutputFile(step.outputFile)
               }
+              // 记录到上下文（包含输出内容）
+              contextStore.recordSkillExecution(step.skillName, 'success', {
+                outputFile: step.outputFile ? {
+                  name: step.outputFile.name,
+                  type: step.outputFile.type,
+                  size: step.outputFile.size
+                } : undefined,
+                output: step.output
+              })
             } else {
               step.status = 'error'
               // 构建完整的错误信息
@@ -1689,6 +1924,10 @@ const handleSkillComplete = async (result: { success: boolean; output?: string; 
                 error: response.error,
                 output: response.output
               }
+              // 记录到上下文
+              contextStore.recordSkillExecution(step.skillName, 'error', {
+                errorMessage: response.error || '执行失败'
+              })
             }
           } else {
             // 没有 skillId，模拟执行
@@ -1703,6 +1942,10 @@ const handleSkillComplete = async (result: { success: boolean; output?: string; 
           step.errorDetails = {
             error: error.message || '未知错误'
           }
+          // 记录到上下文
+          contextStore.recordSkillExecution(step.skillName, 'error', {
+            errorMessage: error.message || '未知错误'
+          })
         }
 
         scrollToBottom()
@@ -2647,6 +2890,15 @@ const executeSkills = async (messageId: number, skills: SkillStep[], startIndex:
             console.log(`[Skill Seq] No output_file, generating local md`)
             step.outputFile = generateOutputFile(step.skillName, step.description, step.output)
           }
+          // 记录到上下文（包含输出内容）
+          contextStore.recordSkillExecution(step.skillName, 'success', {
+            outputFile: step.outputFile ? {
+              name: step.outputFile.name,
+              type: step.outputFile.type,
+              size: step.outputFile.size
+            } : undefined,
+            output: step.output
+          })
         } else {
           step.status = 'error'
           // 构建完整的错误信息
@@ -2662,6 +2914,10 @@ const executeSkills = async (messageId: number, skills: SkillStep[], startIndex:
             error: response.error,
             output: response.output
           }
+          // 记录到上下文
+          contextStore.recordSkillExecution(step.skillName, 'error', {
+            errorMessage: response.error || '执行失败'
+          })
         }
       } else {
         // 没有 skillId，说明技能未找到
@@ -2970,6 +3226,15 @@ const executeSkillsParallel = async (messageId: number) => {
               if (step.outputFile) openOutputFile(step.outputFile)
             }
             console.log(`[Skill Parallel] Step ${step.id} final state: status=${step.status}, hasOutputFile=${!!step.outputFile}`)
+            // 记录到上下文（包含输出内容）
+            contextStore.recordSkillExecution(step.skillName, 'success', {
+              outputFile: step.outputFile ? {
+                name: step.outputFile.name,
+                type: step.outputFile.type,
+                size: step.outputFile.size
+              } : undefined,
+              output: step.output
+            })
           } else {
             step.status = 'error'
             // 构建完整的错误信息
@@ -2985,6 +3250,10 @@ const executeSkillsParallel = async (messageId: number) => {
               error: response.error,
               output: response.output
             }
+            // 记录到上下文
+            contextStore.recordSkillExecution(step.skillName, 'error', {
+              errorMessage: response.error || '执行失败'
+            })
           }
         } else {
           // 没有 skillId，说明技能未找到
@@ -3514,6 +3783,11 @@ const sendMessage = async () => {
   }
   messages.value.push(userMessage)
 
+  // 保存用户消息到会话
+  saveMessageToSession('user', messageContent, {
+    attachments: attachments.length > 0 ? attachments : undefined
+  }, userMessage.timestamp)
+
   // 构建发送给AI的内容（包含文件信息）
   let userInput = inputText.value.trim()
   if (attachments.length > 0) {
@@ -3556,12 +3830,16 @@ const sendMessage = async () => {
   scrollToBottom()
 
   try {
+    // 构建上下文
+    const context = contextStore.toApiContext
+
     // 调用后端 AI 聊天接口（流式）+ 打字机效果
     for await (const chunk of agentApi.chatStream(
       {
         message: userInput,
         history,
-        skill_ids: skillIds
+        skill_ids: skillIds,
+        context: context.length > 0 ? context : undefined
       },
       abortController.signal
     )) {
@@ -3652,6 +3930,12 @@ const sendMessage = async () => {
           }
           scrollToBottom()
 
+          // 保存 AI 消息到会话（包含技能规划，使用当前时间确保顺序正确）
+          saveMessageToSession('agent', agentMessage.content, {
+            skill_plan: skillPlan,
+            pipeline_edges: edges
+          }, new Date())
+
           // 自动开始执行技能流程
           await new Promise(resolve => setTimeout(resolve, 500))
           executeSkillsParallel(agentMessage.id)
@@ -3661,6 +3945,12 @@ const sendMessage = async () => {
         console.error('Failed to parse skill plan:', e)
       }
     }
+
+    // 保存 AI 消息到会话（使用当前时间确保顺序正确）
+    saveMessageToSession('agent', agentMessage.content, {
+      skill_plan: agentMessage.skillPlan,
+      pipeline_edges: agentMessage.pipelineEdges
+    }, new Date())
 
     isProcessing.value = false
   } catch (error: any) {
@@ -3691,11 +3981,18 @@ const sendMessage = async () => {
       }
       scrollToBottom()
 
+      // 保存 AI 消息到会话（本地规划，使用当前时间确保顺序正确）
+      saveMessageToSession('agent', messages.value[msgIndex]?.content || agentMessage.content, {
+        skill_plan: skillPlan,
+        pipeline_edges: pipelineEdges
+      }, new Date())
+
       // 开始执行技能
       await new Promise(resolve => setTimeout(resolve, 400))
       executeSkillsParallel(messages.value[msgIndex]?.id || agentMessage.id)
     } else {
       agentMessage.content = '抱歉，我暂时无法连接到 AI 服务。请稍后再试。'
+      saveMessageToSession('agent', agentMessage.content, undefined, new Date())
       isProcessing.value = false
     }
   } finally {
@@ -4016,7 +4313,7 @@ const downloadCurrentFile = async () => {
         </div>
       </div>
       <div class="header-right">
-        <button class="header-action-btn" @click="clearConversation" title="新建会话">
+        <button class="header-action-btn" @click="startNewConversation" title="新建会话">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
             <line x1="12" y1="8" x2="12" y2="14"/>
@@ -4035,34 +4332,68 @@ const downloadCurrentFile = async () => {
     <div class="chat-body">
       <!-- 垂直业务流程条 - 多流程管理 -->
       <div class="pipeline-sidebar">
-        <div class="pipeline-sidebar-header">
-          <svg class="header-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="3"/>
-            <path d="M12 2v4m0 12v4M2 12h4m12 0h4"/>
-          </svg>
-          <span class="sidebar-title">流程</span>
-          <span v-if="pipelineGroups.length > 0" class="group-counter">({{ pipelineGroups.length }})</span>
+        <!-- Tab 切换 -->
+        <div class="sidebar-tabs">
           <button
-            v-if="pipelineGroups.length > 1"
-            class="collapse-all-btn"
-            @click="collapseAllGroups"
-            :title="pipelineGroups.every(g => !collapsedGroups.has(g.id)) ? '折叠全部' : '展开全部'"
+            class="sidebar-tab"
+            :class="{ active: sidebarTab === 'history' }"
+            @click="sidebarTab = 'history'"
           >
-            <svg v-if="pipelineGroups.every(g => !collapsedGroups.has(g.id))" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="4 14 10 14 10 20"/>
-              <polyline points="20 10 14 10 14 4"/>
-              <line x1="14" y1="10" x2="21" y2="3"/>
-              <line x1="3" y1="21" x2="10" y2="14"/>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
             </svg>
-            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="15 3 21 3 21 9"/>
-              <polyline points="9 21 3 21 3 15"/>
-              <line x1="21" y1="3" x2="14" y2="10"/>
-              <line x1="3" y1="21" x2="10" y2="14"/>
+            <span>历史</span>
+          </button>
+          <button
+            class="sidebar-tab"
+            :class="{ active: sidebarTab === 'pipeline' }"
+            @click="sidebarTab = 'pipeline'"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M12 2v4m0 12v4M2 12h4m12 0h4"/>
             </svg>
+            <span>流程</span>
+            <span v-if="pipelineGroups.length > 0" class="tab-badge">{{ pipelineGroups.length }}</span>
           </button>
         </div>
-        <div class="pipeline-sidebar-content">
+
+        <!-- 历史记录 Tab -->
+        <div v-show="sidebarTab === 'history'" class="sidebar-tab-content">
+          <ChatHistory
+            ref="chatHistoryRef"
+            :current-session-id="currentSessionId"
+            @select-session="loadSession"
+            @delete-session="handleSessionDeleted"
+          />
+        </div>
+
+        <!-- 流程 Tab -->
+        <div v-show="sidebarTab === 'pipeline'" class="sidebar-tab-content">
+          <div class="pipeline-sidebar-header">
+            <span class="sidebar-title">流程管理</span>
+            <span v-if="pipelineGroups.length > 0" class="group-counter">({{ pipelineGroups.length }})</span>
+            <button
+              v-if="pipelineGroups.length > 1"
+              class="collapse-all-btn"
+              @click="collapseAllGroups"
+              :title="pipelineGroups.every(g => !collapsedGroups.has(g.id)) ? '折叠全部' : '展开全部'"
+            >
+              <svg v-if="pipelineGroups.every(g => !collapsedGroups.has(g.id))" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="4 14 10 14 10 20"/>
+                <polyline points="20 10 14 10 14 4"/>
+                <line x1="14" y1="10" x2="21" y2="3"/>
+                <line x1="3" y1="21" x2="10" y2="14"/>
+              </svg>
+              <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 3 21 3 21 9"/>
+                <polyline points="9 21 3 21 3 15"/>
+                <line x1="21" y1="3" x2="14" y2="10"/>
+                <line x1="3" y1="21" x2="10" y2="14"/>
+              </svg>
+            </button>
+          </div>
+          <div class="pipeline-sidebar-content">
           <!-- 有流程组时显示列表 -->
           <div v-if="pipelineGroups.length > 0" class="pipeline-groups">
             <div
@@ -4222,6 +4553,7 @@ const downloadCurrentFile = async () => {
             <span class="empty-text">等待任务</span>
             <span class="empty-hint">发送消息开始</span>
           </div>
+        </div>
         </div>
       </div>
 
@@ -4568,6 +4900,7 @@ const downloadCurrentFile = async () => {
           @dragleave="handleDataNoteDragLeave"
           @drop="handleDataNoteDrop"
         >
+
           <!-- 待发送的数据引用 -->
           <div v-if="pendingRefs.length > 0" class="pending-refs">
             <div
@@ -4630,8 +4963,9 @@ const downloadCurrentFile = async () => {
             </button>
             <textarea
               v-model="inputText"
-              placeholder="描述你想完成的任务，或拖拽文件到这里... 输入 / 插入数据"
+              placeholder="描述你想完成的任务... 输入 @ 引用上下文，/ 插入数据"
               @keydown="handleInputKeydown"
+              @input="handleInputChange"
               @blur="handleInputBlur"
               :disabled="isProcessing"
               rows="1"
@@ -4665,7 +4999,7 @@ const downloadCurrentFile = async () => {
               <span class="processing-hint">AI 正在思考中... 点击红色按钮可停止</span>
             </template>
             <template v-else>
-              按 Enter 发送 · 点击 📎 或拖拽文件上传
+              <span>按 Enter 发送 · @ 引用数据 · / 插入便签</span>
             </template>
           </div>
         </div>
@@ -4799,6 +5133,15 @@ const downloadCurrentFile = async () => {
       :position="slashPopupPosition"
       @select="handleSlashSelect"
       @close="closeSlashPopup"
+    />
+
+    <!-- "@" 上下文引用选择器 -->
+    <ContextPicker
+      :visible="showAtPicker"
+      :query="atQuery"
+      :position="atPickerPosition"
+      @select="handleAtSelect"
+      @close="closeAtPicker"
     />
 
     <!-- 右侧技能执行面板 -->
@@ -5186,13 +5529,80 @@ const downloadCurrentFile = async () => {
 
 /* 垂直流程条 - 多流程管理面板 */
 .pipeline-sidebar {
-  width: 140px;
+  width: 180px;
   background: #f8fafc;
   border-right: 1px solid #e2e8f0;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
   box-shadow: inset -1px 0 0 rgba(0,0,0,0.02);
+}
+
+/* 侧边栏 Tab 切换 */
+.sidebar-tabs {
+  display: flex;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.sidebar-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 10px 8px;
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 500;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.sidebar-tab svg {
+  width: 12px;
+  height: 12px;
+}
+
+.sidebar-tab:hover {
+  color: #334155;
+  background: #f1f5f9;
+}
+
+.sidebar-tab.active {
+  color: #3b82f6;
+}
+
+.sidebar-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 10%;
+  right: 10%;
+  height: 2px;
+  background: #3b82f6;
+  border-radius: 2px 2px 0 0;
+}
+
+.tab-badge {
+  font-size: 9px;
+  font-weight: 600;
+  background: #3b82f6;
+  color: #fff;
+  padding: 1px 5px;
+  border-radius: 8px;
+  min-width: 14px;
+  text-align: center;
+}
+
+.sidebar-tab-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .pipeline-sidebar-header {
@@ -7417,6 +7827,29 @@ const downloadCurrentFile = async () => {
   font-size: 11px;
   color: #9ca3af;
   text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.context-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+  font-size: 11px;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.context-toggle-btn:hover {
+  background: #e2e8f0;
+  color: #334155;
 }
 
 .processing-hint {

@@ -4,5 +4,6 @@ from models.execution import WorkflowExecution
 from models.favorite import UserFavorite
 from models.data_note import DataNote
 from models.ccconfig import CCConfig
+from models.chat import ChatSession, ChatMessage
 
-__all__ = ["Skill", "Workflow", "WorkflowExecution", "UserFavorite", "DataNote", "CCConfig"]
+__all__ = ["Skill", "Workflow", "WorkflowExecution", "UserFavorite", "DataNote", "CCConfig", "ChatSession", "ChatMessage"]
