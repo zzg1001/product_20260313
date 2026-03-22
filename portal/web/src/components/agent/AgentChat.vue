@@ -141,8 +141,69 @@ const messages = ref<Message[]>([
 ])
 
 const inputText = ref('')
+const mainTextareaRef = ref<HTMLTextAreaElement | null>(null)
 const isProcessing = ref(false)
 const chatContainer = ref<HTMLElement | null>(null)
+
+// 输入法 composing 状态
+const isComposing = ref(false)
+const compositionText = ref('')
+
+const handleCompositionStart = () => {
+  isComposing.value = true
+}
+
+const handleCompositionUpdate = (e: CompositionEvent) => {
+  // 获取当前输入框的完整文本（包括正在输入的）
+  const textarea = e.target as HTMLTextAreaElement
+  compositionText.value = textarea.value
+}
+
+const handleCompositionEnd = (e: CompositionEvent) => {
+  isComposing.value = false
+  compositionText.value = ''
+  // 确保 inputText 同步
+  const textarea = e.target as HTMLTextAreaElement
+  inputText.value = textarea.value
+}
+
+// 高亮显示输入框内的 @引用（蓝色）
+const highlightedText = computed(() => {
+  // composing 时使用 compositionText（包含正在输入的内容）
+  const text = isComposing.value && compositionText.value ? compositionText.value : inputText.value
+  if (!text) return ''
+  // 转义 HTML 特殊字符，然后替换 @xxx 为蓝色
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>')
+  // 匹配 @非空白字符
+  return escaped.replace(/@(\S+)/g, '<span class="at-ref">@$1</span>')
+})
+
+// 同步高亮层的滚动位置
+const syncHighlightScroll = () => {
+  const textarea = mainTextareaRef.value
+  const highlight = textarea?.previousElementSibling as HTMLElement
+  if (textarea && highlight) {
+    highlight.scrollTop = textarea.scrollTop
+    highlight.scrollLeft = textarea.scrollLeft
+  }
+}
+
+// 渲染用户消息内容（将 @xxx 显示为标签样式）
+const renderUserContent = (content: string) => {
+  if (!content) return ''
+  // 转义 HTML 特殊字符
+  const escaped = content
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  // 匹配 @非空白字符，替换为标签样式
+  return escaped.replace(/@(\S+)/g, '<span class="at-ref-tag">@$1</span>')
+}
+
 const pendingExecution = ref<{ messageId: number; skills: SkillStep[] } | null>(null)
 const showContinueDialog = ref(false)
 const addedSkillName = ref('')
@@ -217,10 +278,10 @@ const handleDataNoteDrop = (e: DragEvent) => {
   }
 }
 
-// 数据便签（用于"/"补全和保存）
+// 数据便签（用于"@"补全和保存）
 const dataNotesForSlash = ref<DataNote[]>([])
 
-// "/" 补全弹窗
+// "@" 补全弹窗
 const slashPopupRef = ref<InstanceType<typeof SlashCommandPopup> | null>(null)
 const showSlashPopup = ref(false)
 
@@ -294,7 +355,7 @@ const handleClickOutside = (e: MouseEvent) => {
 const slashQuery = ref('')
 const slashPopupPosition = ref({ x: 0, y: 0 })
 
-// 加载便签数据（用于"/"补全，只加载根目录）
+// 加载便签数据（用于"@"补全，只加载根目录）
 const loadDataNotesForSlash = async () => {
   try {
     dataNotesForSlash.value = await dataNotesApi.getAll({ parentId: null })
@@ -339,7 +400,7 @@ const saveToDataNotes = async (outputFile: OutputFile, skillName?: string) => {
     })
     // 标记为已保存，记录 noteId
     savedFiles.value.set(outputFile.url, note.id)
-    // 刷新便签列表供"/"补全使用
+    // 刷新便签列表供"@"补全使用
     loadDataNotesForSlash()
   } catch (e) {
     console.error('Failed to save/unsave data note:', e)
@@ -349,7 +410,7 @@ const saveToDataNotes = async (outputFile: OutputFile, skillName?: string) => {
 // 检查文件是否已保存
 const isFileSaved = (url: string) => savedFiles.value.has(url)
 
-// 检测 "/" 命令输入
+// 检测 "@" 命令输入
 const handleInputKeydown = (e: KeyboardEvent) => {
   // 处理 "@" 引用的键盘导航
   if (showAtPicker.value) {
@@ -373,7 +434,7 @@ const handleInputKeydown = (e: KeyboardEvent) => {
     }
   }
 
-  // 处理 "/" 补全的键盘导航
+  // 处理 "@" 补全的键盘导航
   if (showSlashPopup.value) {
     const navKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace']
     if (navKeys.includes(e.key)) {
@@ -383,9 +444,9 @@ const handleInputKeydown = (e: KeyboardEvent) => {
           // 有查询内容时，允许正常删除查询字符
           return
         } else {
-          // 没有查询内容时，删除 "/" 并关闭弹窗
+          // 没有查询内容时，删除 "@" 并关闭弹窗
           closeSlashPopup()
-          return  // 允许默认行为删除 "/"
+          return  // 允许默认行为删除 "@"
         }
       }
       e.preventDefault()
@@ -402,43 +463,18 @@ const handleInputKeydown = (e: KeyboardEvent) => {
   }
 }
 
-// 输入框内容变化时检测 "/" 和 "@"
+// 输入框内容变化时检测 "@" 引用便签
 const handleInputChange = () => {
   const text = inputText.value
 
-  // 检测 "@" 引用
+  // 检测 "@" 引用便签
   const lastAtIndex = text.lastIndexOf('@')
+
   if (lastAtIndex >= 0) {
+    // 检查 "@" 前是否是空格或行首
     const charBefore = lastAtIndex > 0 ? text[lastAtIndex - 1] : ' '
     if (charBefore === ' ' || charBefore === '\n' || lastAtIndex === 0) {
       const query = text.slice(lastAtIndex + 1)
-      if (!query.includes(' ') && !query.includes('\n')) {
-        atQuery.value = query
-        showAtPicker.value = true
-        // 计算弹窗位置（在输入框上方）
-        const textarea = document.querySelector('.chat-input textarea')
-        if (textarea) {
-          const rect = textarea.getBoundingClientRect()
-          atPickerPosition.value = { x: rect.left + 10, y: window.innerHeight - rect.top + 10 }
-        }
-        return
-      }
-    }
-  }
-
-  // 关闭 @ 选择器
-  if (showAtPicker.value) {
-    closeAtPicker()
-  }
-
-  // 检测 "/" 命令
-  const lastSlashIndex = text.lastIndexOf('/')
-
-  if (lastSlashIndex >= 0) {
-    // 检查 "/" 前是否是空格或行首
-    const charBefore = lastSlashIndex > 0 ? text[lastSlashIndex - 1] : ' '
-    if (charBefore === ' ' || charBefore === '\n' || lastSlashIndex === 0) {
-      const query = text.slice(lastSlashIndex + 1)
       // 只在查询没有空格时显示弹窗
       if (!query.includes(' ') && !query.includes('\n')) {
         // 如果弹窗之前没显示，加载根目录数据
@@ -464,31 +500,45 @@ const handleInputChange = () => {
   }
 }
 
-// 待发送的数据引用（通过 "/" 选择的）
-interface PendingRef {
-  id: string
+// 待发送的数据引用（通过 "@" 选择的）
+// 内联引用信息（用于 @ 引用的文件）
+interface InlineRef {
   name: string
   type: string
   file_url: string
   isFolder: boolean
   folderId?: string
 }
-const pendingRefs = ref<PendingRef[]>([])
+// 存储文件名到文件信息的映射
+const inlineRefMap = ref<Map<string, InlineRef>>(new Map())
 
-// 选择 "/" 补全项（文件直接添加，文件夹显示为文件夹标签，发送时展开）
+// 选择 "@" 补全项（直接在输入框内插入 @文件名）
 const handleSlashSelect = (note: DataNote, isFolder: boolean) => {
   const text = inputText.value
-  const lastSlashIndex = text.lastIndexOf('/')
+  const lastAtIndex = text.lastIndexOf('@')
 
-  // 移除 "/" 及其后的查询
-  if (lastSlashIndex >= 0) {
-    inputText.value = text.slice(0, lastSlashIndex)
+  // 移除 "@" 及其后的查询，然后插入 @文件名（前后加空格）
+  if (lastAtIndex >= 0) {
+    const beforeAt = text.slice(0, lastAtIndex)
+    const afterQuery = text.slice(lastAtIndex).indexOf(' ')
+    const afterText = afterQuery >= 0 ? text.slice(lastAtIndex + afterQuery) : ''
+
+    // 确保前面有空格（如果不是行首）
+    const needSpaceBefore = beforeAt.length > 0 && !beforeAt.endsWith(' ') && !beforeAt.endsWith('\n')
+    const spaceBefore = needSpaceBefore ? ' ' : ''
+
+    // 在输入框内插入 @文件名 格式（前后有空格）
+    inputText.value = beforeAt + spaceBefore + '@' + note.name + ' ' + afterText.trimStart()
+  } else {
+    // 没有找到 @，直接追加（前面加空格）
+    const needSpaceBefore = text.length > 0 && !text.endsWith(' ') && !text.endsWith('\n')
+    const spaceBefore = needSpaceBefore ? ' ' : ''
+    inputText.value = text + spaceBefore + '@' + note.name + ' '
   }
 
+  // 存储文件信息到 Map
   if (isFolder) {
-    // 文件夹：显示文件夹标签，发送时再展开
-    pendingRefs.value.push({
-      id: `ref-${Date.now()}`,
+    inlineRefMap.value.set(note.name, {
       name: note.name,
       type: 'folder',
       file_url: '',
@@ -496,9 +546,7 @@ const handleSlashSelect = (note: DataNote, isFolder: boolean) => {
       folderId: note.id
     })
   } else if (note.file_url) {
-    // 普通文件：直接添加
-    pendingRefs.value.push({
-      id: `ref-${Date.now()}`,
+    inlineRefMap.value.set(note.name, {
       name: note.name,
       type: note.file_type,
       file_url: note.file_url,
@@ -510,15 +558,10 @@ const handleSlashSelect = (note: DataNote, isFolder: boolean) => {
   closeSlashPopup()
 }
 
-// 移除待发送引用
-const removePendingRef = (id: string) => {
-  pendingRefs.value = pendingRefs.value.filter(r => r.id !== id)
-}
-
 // blur 延迟关闭的 timer
 let blurCloseTimer: number | null = null
 
-// 关闭 "/" 弹窗
+// 关闭 "@" 弹窗
 const closeSlashPopup = () => {
   if (blurCloseTimer) {
     clearTimeout(blurCloseTimer)
@@ -609,9 +652,9 @@ const clearConversation = () => {
     timestamp: new Date()
   }]
 
-  // 清空上传的文件和待发送引用
+  // 清空上传的文件和内联引用
   uploadedFiles.value = []
-  pendingRefs.value = []
+  inlineRefMap.value.clear()
 
   // 清空上下文
   contextStore.clearAll()
@@ -683,7 +726,7 @@ const loadSession = async (session: ChatSession) => {
 
     // 重置其他状态
     uploadedFiles.value = []
-    pendingRefs.value = []
+    inlineRefMap.value.clear()
     contextStore.clearAll()
     collapsedGroups.value.clear()
     savedGroups.value.clear()
@@ -1139,7 +1182,7 @@ watch(showSkillExecution, (isShow) => {
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutsidePanel)
   window.removeEventListener('data-notes-changed', handleDataNotesChange)
-  showSlashPopup.value = false  // 关闭 "/" 弹窗
+  showSlashPopup.value = false  // 关闭 "@" 弹窗
 })
 
 // 监听数据便签变化
@@ -1157,7 +1200,7 @@ onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
 })
 
-// 监听输入框变化检测 "/" 命令
+// 监听输入框变化检测 "@" 命令
 watch(inputText, handleInputChange)
 
 // 监听路由变化，关闭弹窗
@@ -3717,61 +3760,71 @@ defineExpose({
 })
 
 const sendMessage = async () => {
-  // 如果 "/" 弹窗打开，Enter 应该选择项目，不发送消息
+  // 如果 "@" 弹窗打开，Enter 应该选择项目，不发送消息
   if (showSlashPopup.value) return
-  if ((!inputText.value.trim() && uploadedFiles.value.length === 0 && pendingRefs.value.length === 0) || isProcessing.value) return
+  if ((!inputText.value.trim() && uploadedFiles.value.length === 0 && inlineRefMap.value.size === 0) || isProcessing.value) return
 
-  // 处理待发送的数据引用（展开文件夹）
+  // 从输入框内容提取 @文件名 格式的引用，获取对应的文件信息
   const refAttachments: MessageAttachment[] = []
-  for (const ref of pendingRefs.value) {
-    if (ref.isFolder && ref.folderId) {
-      // 文件夹：获取所有文件
-      try {
-        const files = await dataNotesApi.getFolderFiles(ref.folderId)
-        for (const f of files) {
-          refAttachments.push({
-            id: `ref-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-            name: f.name,
-            type: f.file_type,
-            size: parseInt(f.file_size || '0') || 0,
-            serverPath: f.file_url
-          })
+  const textContent = inputText.value
+
+  // 匹配所有 @xxx 格式（非空白字符）
+  const atMatches = textContent.match(/@(\S+)/g) || []
+  const referencedNames = new Set(atMatches.map(m => m.slice(1))) // 去掉 @ 前缀
+
+  for (const name of referencedNames) {
+    const ref = inlineRefMap.value.get(name)
+    if (ref) {
+      if (ref.isFolder && ref.folderId) {
+        // 文件夹：获取所有文件
+        try {
+          const files = await dataNotesApi.getFolderFiles(ref.folderId)
+          for (const f of files) {
+            refAttachments.push({
+              id: `ref-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+              name: f.name,
+              type: f.file_type,
+              size: parseInt(f.file_size || '0') || 0,
+              serverPath: f.file_url
+            })
+          }
+        } catch (e) {
+          console.error('Failed to get folder files:', e)
         }
-      } catch (e) {
-        console.error('Failed to get folder files:', e)
+      } else {
+        // 普通文件
+        refAttachments.push({
+          id: `ref-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          name: ref.name,
+          type: ref.type,
+          size: 0,
+          serverPath: ref.file_url
+        })
       }
-    } else {
-      // 普通文件
-      refAttachments.push({
-        id: ref.id,
-        name: ref.name,
-        type: ref.type,
-        size: 0,
-        serverPath: ref.file_url
-      })
     }
   }
-  pendingRefs.value = []
+  // 清空引用 Map
+  inlineRefMap.value.clear()
 
-  // 收集附件信息（包含服务器路径）
-  const attachments: MessageAttachment[] = [
-    ...uploadedFiles.value
-      .filter(f => !f.uploading && !f.uploadError)
-      .map(f => ({
-        id: f.id,
-        name: f.name,
-        type: f.type,
-        size: f.size,
-        url: f.url,
-        serverPath: f.serverPath
-      })),
-    ...refAttachments
-  ]
+  // 收集上传的附件（显示为卡片）- 只包含通过上传按钮上传的文件
+  const displayAttachments: MessageAttachment[] = uploadedFiles.value
+    .filter(f => !f.uploading && !f.uploadError)
+    .map(f => ({
+      id: f.id,
+      name: f.name,
+      type: f.type,
+      size: f.size,
+      url: f.url,
+      serverPath: f.serverPath
+    }))
 
-  // 构建消息内容（包含文件描述）
+  // 所有需要发送给 AI 的文件（包含上传的文件和 @ 引用的文件）
+  const allFilesForAI: MessageAttachment[] = [...displayAttachments, ...refAttachments]
+
+  // 构建消息内容
   let messageContent = inputText.value.trim()
-  if (attachments.length > 0 && !messageContent) {
-    messageContent = `[上传了 ${attachments.length} 个文件]`
+  if (displayAttachments.length > 0 && !messageContent) {
+    messageContent = `[上传了 ${displayAttachments.length} 个文件]`
   }
 
   const userMessage: Message = {
@@ -3779,19 +3832,20 @@ const sendMessage = async () => {
     type: 'user',
     content: messageContent,
     timestamp: new Date(),
-    attachments: attachments.length > 0 ? attachments : undefined
+    // 只有上传的文件显示为卡片，@ 引用的文件在文本中显示
+    attachments: displayAttachments.length > 0 ? displayAttachments : undefined
   }
   messages.value.push(userMessage)
 
   // 保存用户消息到会话
   saveMessageToSession('user', messageContent, {
-    attachments: attachments.length > 0 ? attachments : undefined
+    attachments: displayAttachments.length > 0 ? displayAttachments : undefined
   }, userMessage.timestamp)
 
-  // 构建发送给AI的内容（包含文件信息）
+  // 构建发送给AI的内容（包含所有文件信息）
   let userInput = inputText.value.trim()
-  if (attachments.length > 0) {
-    const fileDesc = attachments.map(f => `[文件: ${f.name} (${f.type})]`).join(', ')
+  if (allFilesForAI.length > 0) {
+    const fileDesc = allFilesForAI.map(f => `[文件: ${f.name} (${f.type})]`).join(', ')
     userInput = userInput ? `${userInput}\n\n附件: ${fileDesc}` : `请处理这些文件: ${fileDesc}`
   }
 
@@ -4584,7 +4638,7 @@ const downloadCurrentFile = async () => {
                   </div>
                 </div>
               </div>
-              <p v-if="message.content && !message.content.startsWith('[上传了')">{{ message.content }}</p>
+              <p v-if="message.content && !message.content.startsWith('[上传了')" v-html="renderUserContent(message.content)"></p>
               <span class="message-time">{{ formatTime(message.timestamp) }}</span>
             </div>
             <div class="user-avatar">👤</div>
@@ -4901,20 +4955,6 @@ const downloadCurrentFile = async () => {
           @drop="handleDataNoteDrop"
         >
 
-          <!-- 待发送的数据引用 -->
-          <div v-if="pendingRefs.length > 0" class="pending-refs">
-            <div
-              v-for="ref in pendingRefs"
-              :key="ref.id"
-              class="pending-ref"
-              :class="{ folder: ref.isFolder }"
-            >
-              <span class="ref-icon">{{ ref.isFolder ? '📁' : '📎' }}</span>
-              <span class="ref-name">{{ ref.name }}</span>
-              <button class="ref-remove" @click="removePendingRef(ref.id)">×</button>
-            </div>
-          </div>
-
           <!-- 已上传文件预览 -->
           <div v-if="uploadedFiles.length > 0" class="uploaded-files">
             <div
@@ -4961,15 +5001,25 @@ const downloadCurrentFile = async () => {
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
               </svg>
             </button>
-            <textarea
-              v-model="inputText"
-              placeholder="描述你想完成的任务... 输入 @ 引用上下文，/ 插入数据"
-              @keydown="handleInputKeydown"
-              @input="handleInputChange"
-              @blur="handleInputBlur"
-              :disabled="isProcessing"
-              rows="1"
-            ></textarea>
+            <div class="textarea-container">
+              <!-- 高亮层：显示带颜色的 @引用 -->
+              <div class="textarea-highlight" v-html="highlightedText"></div>
+              <!-- 实际输入框 -->
+              <textarea
+                ref="mainTextareaRef"
+                v-model="inputText"
+                placeholder="描述你想完成的任务... 输入 @ 引用便签"
+                @keydown="handleInputKeydown"
+                @input="handleInputChange"
+                @blur="handleInputBlur"
+                @scroll="syncHighlightScroll"
+                @compositionstart="handleCompositionStart"
+                @compositionupdate="handleCompositionUpdate"
+                @compositionend="handleCompositionEnd"
+                :disabled="isProcessing"
+                rows="1"
+              ></textarea>
+            </div>
             <!-- 停止按钮 -->
             <button
               v-if="isProcessing"
@@ -4986,7 +5036,7 @@ const downloadCurrentFile = async () => {
               v-else
               class="send-btn"
               @click="sendMessage"
-              :disabled="!inputText.trim() && uploadedFiles.length === 0 && pendingRefs.length === 0"
+              :disabled="!inputText.trim() && uploadedFiles.length === 0"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -4999,7 +5049,7 @@ const downloadCurrentFile = async () => {
               <span class="processing-hint">AI 正在思考中... 点击红色按钮可停止</span>
             </template>
             <template v-else>
-              <span>按 Enter 发送 · @ 引用数据 · / 插入便签</span>
+              <span>按 Enter 发送 · @ 引用便签</span>
             </template>
           </div>
         </div>
@@ -5124,7 +5174,7 @@ const downloadCurrentFile = async () => {
 
     </div>
 
-    <!-- "/" 补全弹窗（级联菜单） -->
+    <!-- "@" 补全弹窗（级联菜单） -->
     <SlashCommandPopup
       ref="slashPopupRef"
       :notes="dataNotesForSlash"
@@ -7741,21 +7791,69 @@ const downloadCurrentFile = async () => {
   background: #fff;
 }
 
-.input-wrapper textarea {
+/* 输入框容器（包含高亮层和 textarea） */
+.textarea-container {
   flex: 1;
+  position: relative;
+  min-height: 20px;
+}
+
+/* 高亮层：显示带颜色的 @引用 */
+.textarea-highlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 8px 0;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #111827;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* @引用显示为标签样式（输入框内） */
+.textarea-highlight :deep(.at-ref) {
+  background: #dbeafe;
+  color: #1d4ed8;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+/* @引用显示为标签样式（对话框内） */
+.message-user :deep(.at-ref-tag) {
+  display: inline-block;
+  background: #dbeafe;
+  color: #1d4ed8;
+  padding: 1px 6px;
+  margin: 0 2px;
+  border-radius: 4px;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.textarea-container textarea {
+  width: 100%;
   background: transparent;
   border: none;
   outline: none;
-  color: #111827;
+  color: transparent;
+  caret-color: #111827;
   font-family: inherit;
   font-size: 13px;
   line-height: 1.5;
   padding: 8px 0;
   resize: none;
   max-height: 100px;
+  position: relative;
+  z-index: 1;
 }
 
-.input-wrapper textarea::placeholder {
+.textarea-container textarea::placeholder {
   color: #9ca3af;
 }
 
@@ -8152,58 +8250,6 @@ const downloadCurrentFile = async () => {
   height: 20px;
 }
 
-/* 待发送的数据引用 */
-.pending-refs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 12px;
-  background: #fffbeb;
-  border-bottom: 1px solid #fde68a;
-  border-radius: 12px 12px 0 0;
-}
-
-.pending-ref {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  background: #fff;
-  border: 1px solid #fbbf24;
-  border-radius: 12px;
-  font-size: 12px;
-  color: #92400e;
-}
-
-.pending-ref.folder {
-  background: #fef3c7;
-}
-
-.ref-icon {
-  font-size: 12px;
-}
-
-.ref-name {
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ref-remove {
-  background: none;
-  border: none;
-  color: #d97706;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  padding: 0 2px;
-}
-
-.ref-remove:hover {
-  color: #b45309;
-}
-
 /* 已上传文件预览区 */
 .uploaded-files {
   display: flex;
@@ -8213,10 +8259,6 @@ const downloadCurrentFile = async () => {
   background: #f8fafc;
   border-bottom: 1px solid #e5e7eb;
   border-radius: 12px 12px 0 0;
-}
-
-.pending-refs + .uploaded-files {
-  border-radius: 0;
 }
 
 .uploaded-file {
