@@ -67,7 +67,8 @@ interface Message {
   dataNodes?: Record<string, any>  // 数据节点信息（用于获取输入文件）
   waitingForSkill?: string // 等待添加的技能名
   pipelineGroupId?: string  // 关联的 group ID
-  attachments?: MessageAttachment[]  // 附件
+  attachments?: MessageAttachment[]  // 附件（显示为卡片）
+  inlineRefs?: MessageAttachment[]  // @ 引用的文件（只显示为文本，不显示卡片）
 }
 
 // 新增：流程组接口
@@ -710,7 +711,8 @@ const loadSession = async (session: ChatSession) => {
         timestamp: new Date(msg.created_at || ''),
         skillPlan,
         pipelineEdges: msg.metadata?.pipeline_edges,
-        attachments: msg.metadata?.attachments
+        attachments: msg.metadata?.attachments,
+        inlineRefs: msg.metadata?.inlineRefs
       }
     })
 
@@ -2251,10 +2253,19 @@ const lastUserQuery = computed(() => {
 const getContextFilePaths = (): string[] => {
   for (let i = messages.value.length - 1; i >= 0; i--) {
     const msg = messages.value[i]
-    if (msg && msg.type === 'user' && msg.attachments?.length) {
-      return msg.attachments
-        .filter(a => a.serverPath)
-        .map(a => a.serverPath!)
+    if (msg && msg.type === 'user') {
+      const paths: string[] = []
+      // 从上传的附件获取
+      if (msg.attachments?.length) {
+        paths.push(...msg.attachments.filter(a => a.serverPath).map(a => a.serverPath!))
+      }
+      // 从 @ 引用的文件获取
+      if (msg.inlineRefs?.length) {
+        paths.push(...msg.inlineRefs.filter(a => a.serverPath).map(a => a.serverPath!))
+      }
+      if (paths.length > 0) {
+        return paths
+      }
     }
   }
   return []
@@ -3833,13 +3844,16 @@ const sendMessage = async () => {
     content: messageContent,
     timestamp: new Date(),
     // 只有上传的文件显示为卡片，@ 引用的文件在文本中显示
-    attachments: displayAttachments.length > 0 ? displayAttachments : undefined
+    attachments: displayAttachments.length > 0 ? displayAttachments : undefined,
+    // @ 引用的文件存储在 inlineRefs 中（不显示为卡片，但保留 serverPath 供 skill 执行使用）
+    inlineRefs: refAttachments.length > 0 ? refAttachments : undefined
   }
   messages.value.push(userMessage)
 
   // 保存用户消息到会话
   saveMessageToSession('user', messageContent, {
-    attachments: displayAttachments.length > 0 ? displayAttachments : undefined
+    attachments: displayAttachments.length > 0 ? displayAttachments : undefined,
+    inlineRefs: refAttachments.length > 0 ? refAttachments : undefined
   }, userMessage.timestamp)
 
   // 构建发送给AI的内容（包含所有文件信息）
