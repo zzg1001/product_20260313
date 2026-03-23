@@ -3,6 +3,7 @@ CCSwitch API - Claude 配置管理
 支持测试、编辑、启用、复制、导出、导入
 使用 MySQL 持久化存储（与 Portal 共享）
 """
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -35,7 +36,7 @@ def init_default_config():
                 name="Claude Opus 4.5 (Azure)",
                 description="默认配置 - Azure 代理的 Claude Opus 4.5 模型",
                 model_id="claude-opus-4-5",
-                api_key="***REMOVED***",
+                api_key=os.getenv("AZURE_API_KEY", ""),
                 base_url="https://yunqinghu-3344-resource.services.ai.azure.com/anthropic/",
                 max_tokens=4096,
                 temperature=0.7,

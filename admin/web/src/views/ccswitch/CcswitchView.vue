@@ -209,7 +209,7 @@ const initDefaultConfig = async () => {
       name: 'Claude Opus 4.5 (Azure)',
       description: '默认配置 - Azure 代理的 Claude Opus 4.5 模型',
       model_id: 'claude-opus-4-5',
-      api_key: '***REMOVED***',
+      api_key: '',  // API Key 应通过后端环境变量配置
       base_url: 'https://yunqinghu-3344-resource.services.ai.azure.com/anthropic/',
       max_tokens: 4096,
       temperature: 0.7,
