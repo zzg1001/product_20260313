@@ -6,6 +6,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 import json
 from database import get_db
+from config import get_uploads_dir, get_skills_storage_temp_dir
 from schemas.agent import (
     ChatRequest, ChatResponse,
     PlanRequest, PlanResponse,
@@ -26,9 +27,8 @@ from routers.logs import (
 
 router = APIRouter(prefix="/api/agent", tags=["Agent"])
 
-# 上传目录
-UPLOADS_DIR = Path(__file__).parent.parent / "uploads"
-UPLOADS_DIR.mkdir(exist_ok=True)
+# 使用统一配置的上传目录
+UPLOADS_DIR = get_uploads_dir()
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -237,11 +237,10 @@ async def execute_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
 @router.post("/execute-temp", response_model=ExecuteResponse)
 async def execute_temp_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
     """执行临时技能（用于测试）"""
-    from pathlib import Path
     import json as json_lib
 
     temp_id = request.skill_id
-    temp_skills_dir = Path(__file__).parent.parent / "skills_storage_temp"
+    temp_skills_dir = get_skills_storage_temp_dir()
     temp_folder = temp_skills_dir / temp_id
 
     if not temp_folder.exists():

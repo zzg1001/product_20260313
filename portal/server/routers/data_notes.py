@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func as sql_func
 from typing import List, Optional
 from database import get_db
+from config import get_uploads_dir
 from models.data_note import DataNote
 from schemas.data_note import DataNoteCreate, DataNoteUpdate, DataNoteResponse, FolderCreate, MoveToFolder
 
@@ -16,8 +17,8 @@ router = APIRouter(prefix="/api", tags=["Data Notes"])
 
 MAX_FOLDER_LEVEL = 3  # 最大文件夹层级
 
-UPLOADS_DIR = Path(__file__).parent.parent / "uploads"
-UPLOADS_DIR.mkdir(exist_ok=True)
+# 使用统一配置的上传目录
+UPLOADS_DIR = get_uploads_dir()
 
 
 def get_user_id(x_user_id: Optional[str] = Header(None)) -> str:

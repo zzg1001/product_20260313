@@ -8,6 +8,21 @@ import json
 
 
 class Settings(BaseSettings):
+    # Server
+    admin_api_url: str = "http://127.0.0.1:8001/api"
+
+    @property
+    def server_host(self) -> str:
+        from urllib.parse import urlparse
+        parsed = urlparse(self.admin_api_url)
+        return parsed.hostname or "127.0.0.1"
+
+    @property
+    def server_port(self) -> int:
+        from urllib.parse import urlparse
+        parsed = urlparse(self.admin_api_url)
+        return parsed.port or 8001
+
     # Environment
     env: str = "development"
     debug: bool = True

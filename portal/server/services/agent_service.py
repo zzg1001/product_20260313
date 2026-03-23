@@ -7,21 +7,26 @@ from typing import List, Optional, Dict, Any, AsyncGenerator
 from sqlalchemy.orm import Session
 import anthropic
 import pandas as pd
-from config import get_settings
+from config import (
+    get_settings,
+    get_skills_storage_dir,
+    get_uploads_dir,
+    get_outputs_dir,
+    get_server_dir
+)
 from models.skill import Skill
 from models.ccconfig import CCConfig
 from schemas.agent import SkillPlanItem
-from services.file_generator import OUTPUTS_DIR, generate_unique_filename
+from services.file_generator import generate_unique_filename
 from routers.logs import log_ai_start, log_ai_done, log_error
 
 settings = get_settings()
 
-# 技能文件夹存储目录
-SKILLS_STORAGE_DIR = Path(__file__).parent.parent / "skills_storage"
-# 上传文件目录
-UPLOADS_DIR = Path(__file__).parent.parent / "uploads"
-# Server 根目录（用于查找 node_modules）
-SERVER_DIR = Path(__file__).parent.parent
+# 使用统一配置的路径
+SKILLS_STORAGE_DIR = get_skills_storage_dir()
+UPLOADS_DIR = get_uploads_dir()
+OUTPUTS_DIR = get_outputs_dir()
+SERVER_DIR = get_server_dir()
 
 
 class AgentService:
@@ -574,6 +579,20 @@ OUTPUT_PATH = r'{output_path}'
             if not node_modules_path.exists():
                 print(f"[PPTX Code] pptxgenjs not found at {node_modules_path}, installing...")
                 if npm_path:
+                    # 先确保 package.json 存在，否则 npm install 可能失败
+                    package_json_path = SERVER_DIR / "package.json"
+                    if not package_json_path.exists():
+                        print("[PPTX Code] Creating package.json...")
+                        init_result = subprocess.run(
+                            [npm_path, "init", "-y"],
+                            capture_output=True,
+                            text=True,
+                            timeout=30,
+                            cwd=str(SERVER_DIR)
+                        )
+                        if init_result.returncode != 0:
+                            print(f"[PPTX Code] npm init failed: {init_result.stderr}")
+
                     install_result = subprocess.run(
                         [npm_path, "install", "pptxgenjs"],
                         capture_output=True,
@@ -3739,6 +3758,14 @@ const pptxgen = require("pptxgenjs");
             if skill_md_path.exists():
                 try:
                     skill_md_content = skill_md_path.read_text(encoding="utf-8")
+                    # 替换占位符为实际路径
+                    skill_folder_str = str(skill_folder).replace('\\', '/')
+                    outputs_str = str(OUTPUTS_DIR).replace('\\', '/')
+                    uploads_str = str(UPLOADS_DIR).replace('\\', '/')
+                    skill_md_content = skill_md_content.replace('<skill-path>', skill_folder_str)
+                    skill_md_content = skill_md_content.replace('"<skill-path>"', f'"{skill_folder_str}"')
+                    skill_md_content = skill_md_content.replace('<outputs>', outputs_str)
+                    skill_md_content = skill_md_content.replace('<uploads>', uploads_str)
                 except:
                     pass
 

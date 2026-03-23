@@ -24,6 +24,9 @@ else:
         settings.database_url,
         pool_pre_ping=True,
         pool_recycle=3600,
+        pool_size=10,        # 连接池大小（默认5）
+        max_overflow=20,     # 允许的额外连接数（默认10）
+        pool_timeout=60,     # 获取连接的超时时间（默认30秒）
         echo=settings.debug
     )
 

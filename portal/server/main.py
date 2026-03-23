@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
-from pathlib import Path
 from database import init_db
 # 导入 models 确保表被创建
 import models  # noqa: F401
@@ -11,12 +10,11 @@ from routers.favorites import router as favorites_router
 from routers.logs import router as logs_router, setup_log_handler, sys_ready
 from routers.agents import router as agents_router
 from routers.agent_modules import router as agent_modules_router
+from config import get_outputs_dir, get_uploads_dir
 
-# 确保 outputs 和 uploads 目录存在
-OUTPUTS_DIR = Path(__file__).parent / "outputs"
-OUTPUTS_DIR.mkdir(exist_ok=True)
-UPLOADS_DIR = Path(__file__).parent / "uploads"
-UPLOADS_DIR.mkdir(exist_ok=True)
+# 使用配置的路径（目录会自动创建）
+OUTPUTS_DIR = get_outputs_dir()
+UPLOADS_DIR = get_uploads_dir()
 
 
 @asynccontextmanager

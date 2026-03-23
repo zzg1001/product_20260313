@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from database import get_db
-from config import get_settings
+from config import get_settings, get_skills_storage_dir, get_skills_storage_temp_dir
 from schemas.skill import SkillCreate, SkillUpdate, SkillResponse, SkillVersionResponse
 from models.skill import Skill
 
@@ -16,13 +16,11 @@ settings = get_settings()
 
 router = APIRouter(prefix="/api/skills", tags=["Skills"])
 
-# 技能文件夹存储目录
-SKILLS_STORAGE_DIR = Path(__file__).parent.parent / "skills_storage"
-SKILLS_STORAGE_DIR.mkdir(exist_ok=True)
+# 技能文件夹存储目录 - 使用统一配置
+SKILLS_STORAGE_DIR = get_skills_storage_dir()
 
-# 临时技能文件夹（用于测试）
-TEMP_SKILLS_STORAGE_DIR = Path(__file__).parent.parent / "skills_storage_temp"
-TEMP_SKILLS_STORAGE_DIR.mkdir(exist_ok=True)
+# 临时技能文件夹（用于测试）- 使用统一配置
+TEMP_SKILLS_STORAGE_DIR = get_skills_storage_temp_dir()
 
 
 @router.get("", response_model=List[SkillResponse])
@@ -809,8 +807,8 @@ def main(params):
     from pathlib import Path
     from datetime import datetime
 
-    # 输出目录
-    _outputs_dir = Path(__file__).parent.parent.parent / "outputs"
+    # 输出目录 - 使用执行时传入的 OUTPUTS_DIR
+    _outputs_dir = OUTPUTS_DIR if 'OUTPUTS_DIR' in dir() else Path(__file__).parent.parent.parent / "outputs"
     _outputs_dir.mkdir(exist_ok=True)
 
     def _generate_unique_filename(ext):

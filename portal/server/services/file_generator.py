@@ -276,9 +276,9 @@ FILE_TYPES: Dict[str, FileTypeInfo] = {
                           ["blend", "blender"], False, "Blender 文件"),
 }
 
-# 输出目录
-OUTPUTS_DIR = Path(__file__).parent.parent / "outputs"
-OUTPUTS_DIR.mkdir(exist_ok=True)
+# 输出目录 - 使用统一配置
+from config import get_outputs_dir
+OUTPUTS_DIR = get_outputs_dir()
 
 
 # ============================================================

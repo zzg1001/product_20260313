@@ -40,3 +40,13 @@ app.include_router(ccswitch.router, prefix="/api/ccswitch", tags=["CCSwitch"])
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "admin-api"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host=settings.server_host,
+        port=settings.server_port,
+        reload=True
+    )
