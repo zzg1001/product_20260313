@@ -1247,14 +1247,6 @@ onUnmounted(() => {
             <span class="nav-icon">🔄</span>
             <span class="nav-label">流程</span>
           </button>
-          <button class="nav-btn" :class="{ active: activeTab === 'agents' }" @click="activeTab = 'agents'">
-            <span class="nav-icon">🤖</span>
-            <span class="nav-label">Agents</span>
-          </button>
-          <button class="nav-btn" :class="{ active: activeTab === 'monitor' }" @click="activeTab = 'monitor'">
-            <span class="nav-icon">📊</span>
-            <span class="nav-label">监控</span>
-          </button>
         </div>
         <div class="nav-spacer"></div>
       </nav>
