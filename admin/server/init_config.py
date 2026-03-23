@@ -2,6 +2,7 @@
 初始化默认 Claude 配置
 运行: python init_config.py
 """
+import os
 import sys
 sys.path.insert(0, '.')
 
@@ -36,7 +37,7 @@ try:
             name="Claude Opus 4.5 (Azure)",
             description="默认配置 - Azure 代理的 Claude Opus 4.5 模型",
             model_id="claude-opus-4-5",
-            api_key="***REMOVED***",
+            api_key=os.getenv("AZURE_API_KEY", ""),
             base_url="https://yunqinghu-3344-resource.services.ai.azure.com/anthropic/",
             max_tokens=4096,
             temperature=0.7,
