@@ -1,10 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-import { useI18n } from 'vue-i18n'
+import { ref, onMounted } from 'vue'
 import config from '@/config'
 import { setLocale, getLocale } from '@/locales'
-
-const { t, locale } = useI18n()
 
 const currentTab = ref('manufacturing')
 const tabs = ['manufacturing', 'healthcare', 'retail', 'energy']
