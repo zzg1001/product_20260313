@@ -1,11 +1,70 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 
 const router = useRouter()
 const route = useRoute()
 
+// 上下缩放状态：true=展开显示导航项，false=收起只显示手柄
 const isExpanded = ref(false)
+
+// 拖拽移动位置（默认左下角）
+const navPosition = ref({ x: 0, y: window.innerHeight - 80 })
+const isDragging = ref(false)
+const dragOffset = ref({ x: 0, y: 0 })
+const dragStartPos = ref({ x: 0, y: 0 })
+const hasMoved = ref(false)
+
+const startDrag = (e: MouseEvent) => {
+  const target = e.target as HTMLElement
+  if (!target.closest('.nav-drag-handle')) return
+  e.preventDefault()
+  isDragging.value = true
+  hasMoved.value = false
+  dragStartPos.value = { x: e.clientX, y: e.clientY }
+  dragOffset.value = {
+    x: e.clientX - navPosition.value.x,
+    y: e.clientY - navPosition.value.y
+  }
+  document.addEventListener('mousemove', handleDrag)
+  document.addEventListener('mouseup', stopDrag)
+  document.body.style.userSelect = 'none'
+}
+
+const handleDrag = (e: MouseEvent) => {
+  if (!isDragging.value) return
+  const dx = Math.abs(e.clientX - dragStartPos.value.x)
+  const dy = Math.abs(e.clientY - dragStartPos.value.y)
+  if (dx > 5 || dy > 5) {
+    hasMoved.value = true
+    document.body.style.cursor = 'grabbing'
+  }
+  if (!hasMoved.value) return
+  const newX = e.clientX - dragOffset.value.x
+  const newY = e.clientY - dragOffset.value.y
+  navPosition.value = {
+    x: Math.max(0, Math.min(window.innerWidth - 60, newX)),
+    y: Math.max(20, Math.min(window.innerHeight - 60, newY))
+  }
+}
+
+const stopDrag = () => {
+  // 没移动则视为点击，切换上下缩放
+  if (!hasMoved.value) {
+    isExpanded.value = !isExpanded.value
+  }
+  isDragging.value = false
+  hasMoved.value = false
+  document.removeEventListener('mousemove', handleDrag)
+  document.removeEventListener('mouseup', stopDrag)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+}
+
+onUnmounted(() => {
+  document.removeEventListener('mousemove', handleDrag)
+  document.removeEventListener('mouseup', stopDrag)
+})
 
 interface NavItem {
   path: string
@@ -42,24 +101,21 @@ const navigate = (item: NavItem) => {
     router.push(item.path)
   }
 }
-
-const toggleNav = () => {
-  isExpanded.value = !isExpanded.value
-}
 </script>
 
 <template>
-  <nav :class="['global-nav', { expanded: isExpanded }]">
-    <!-- 展开/收起按钮 -->
-    <button class="nav-toggle" @click="toggleNav">
-      <svg viewBox="0 0 20 20" fill="currentColor">
-        <path v-if="isExpanded" fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd"/>
-        <path v-else fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
-      </svg>
-    </button>
+  <nav
+    :class="['global-nav', { expanded: isExpanded, dragging: isDragging }]"
+    :style="{ left: navPosition.x + 'px', top: navPosition.y + 'px' }"
+    @mousedown="startDrag"
+  >
+    <!-- 拖拽手柄（点击上下缩放，拖拽移动） -->
+    <div class="nav-drag-handle" :title="isExpanded ? '点击收起 / 拖拽移动' : '点击展开 / 拖拽移动'">
+      <span></span><span></span><span></span>
+    </div>
 
-    <!-- 导航项 -->
-    <div class="nav-items">
+    <!-- 导航项（展开时显示） -->
+    <div v-show="isExpanded" class="nav-items">
       <button
         v-for="item in navItems"
         :key="item.name"
@@ -68,7 +124,6 @@ const toggleNav = () => {
         :title="item.label"
       >
         <span class="nav-icon">{{ item.icon }}</span>
-        <span v-if="isExpanded" class="nav-label">{{ item.label }}</span>
       </button>
     </div>
   </nav>
@@ -77,69 +132,78 @@ const toggleNav = () => {
 <style scoped>
 .global-nav {
   position: fixed;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
   z-index: 1000;
   display: flex;
   flex-direction: column;
   background: #fff;
   border: 1px solid #e5e7eb;
-  border-left: none;
-  border-radius: 0 12px 12px 0;
-  padding: 8px;
-  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.08);
-  transition: all 0.3s ease;
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transition: box-shadow 0.2s ease;
 }
 
-.global-nav.expanded {
-  width: 130px;
+.global-nav.dragging {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  opacity: 0.9;
 }
 
-.nav-toggle {
+/* 拖拽手柄 */
+.nav-drag-handle {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  background: transparent;
-  border: none;
-  color: #94a3b8;
-  cursor: pointer;
+  gap: 3px;
+  padding: 8px 10px;
+  cursor: grab;
+  transition: background 0.2s;
   border-radius: 8px;
-  margin-bottom: 8px;
-  transition: all 0.2s;
 }
 
-.nav-toggle:hover {
+.global-nav.expanded .nav-drag-handle {
+  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 6px;
+  border-radius: 8px 8px 0 0;
+}
+
+.nav-drag-handle:hover {
   background: #f1f5f9;
-  color: #64748b;
 }
 
-.nav-toggle svg {
-  width: 16px;
-  height: 16px;
+.nav-drag-handle:active {
+  cursor: grabbing;
+}
+
+.nav-drag-handle span {
+  width: 18px;
+  height: 2px;
+  background: #cbd5e1;
+  border-radius: 1px;
+  transition: background 0.2s;
+}
+
+.nav-drag-handle:hover span {
+  background: #94a3b8;
 }
 
 .nav-items {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
+  justify-content: center;
+  padding: 8px 10px;
   background: transparent;
   border: none;
   border-radius: 8px;
   color: #64748b;
-  font-size: 14px;
   cursor: pointer;
   transition: all 0.2s;
-  white-space: nowrap;
 }
 
 .nav-item:hover {
@@ -154,10 +218,5 @@ const toggleNav = () => {
 
 .nav-icon {
   font-size: 18px;
-  flex-shrink: 0;
-}
-
-.nav-label {
-  font-weight: 500;
 }
 </style>
