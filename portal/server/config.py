@@ -12,8 +12,19 @@ SERVER_DIR = Path(__file__).parent
 
 class Settings(BaseSettings):
     # Server
-    server_host: str = "127.0.0.1"
-    server_port: int = 8000
+    portal_api_url: str = "http://127.0.0.1:8000/api"
+
+    @property
+    def server_host(self) -> str:
+        from urllib.parse import urlparse
+        parsed = urlparse(self.portal_api_url)
+        return parsed.hostname or "127.0.0.1"
+
+    @property
+    def server_port(self) -> int:
+        from urllib.parse import urlparse
+        parsed = urlparse(self.portal_api_url)
+        return parsed.port or 8000
 
     # Database
     db_host: str = "localhost"

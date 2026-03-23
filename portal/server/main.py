@@ -69,3 +69,15 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    from config import get_settings
+    settings = get_settings()
+    uvicorn.run(
+        "main:app",
+        host=settings.server_host,
+        port=settings.server_port,
+        reload=True
+    )
