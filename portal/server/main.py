@@ -9,6 +9,8 @@ import models  # noqa: F401
 from routers import skills_router, workflows_router, agent_router, executions_router, data_notes_router, chat_router
 from routers.favorites import router as favorites_router
 from routers.logs import router as logs_router, setup_log_handler, sys_ready
+from routers.agents import router as agents_router
+from routers.agent_modules import router as agent_modules_router
 
 # 确保 outputs 和 uploads 目录存在
 OUTPUTS_DIR = Path(__file__).parent / "outputs"
@@ -52,6 +54,8 @@ app.include_router(favorites_router)
 app.include_router(data_notes_router)
 app.include_router(logs_router)
 app.include_router(chat_router)
+app.include_router(agents_router)
+app.include_router(agent_modules_router)
 
 # 静态文件服务 - 输出文件下载
 app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")

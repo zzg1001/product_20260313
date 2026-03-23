@@ -1386,13 +1386,238 @@ export const chatSessionsApi = {
     }),
 }
 
+// ============ Agents API (Agent 配置管理) ============
+
+export interface MemoryConfig {
+  enabled: boolean
+  type: string
+  max_history: number
+}
+
+export interface ReasoningConfig {
+  enabled: boolean
+  style: string
+}
+
+export interface Agent {
+  id: string
+  name: string
+  description: string
+  icon: string
+  category: string
+  system_prompt: string
+  model: string
+  temperature: number
+  max_tokens: number
+  tools: string[]
+  skills: string[]
+  memory: MemoryConfig
+  reasoning: ReasoningConfig
+  status: string
+  author: string
+  version: string
+  usage_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface AgentCreate {
+  name: string
+  description?: string
+  icon?: string
+  category?: string
+  system_prompt?: string
+  model?: string
+  temperature?: number
+  max_tokens?: number
+  tools?: string[]
+  skills?: string[]
+  memory?: Partial<MemoryConfig>
+  reasoning?: Partial<ReasoningConfig>
+}
+
+export interface AgentUpdate extends Partial<AgentCreate> {
+  status?: string
+}
+
+export interface AgentListResponse {
+  agents: Agent[]
+  total: number
+}
+
+export const agentsApi = {
+  // 获取 Agent 列表
+  getAll: (params?: { category?: string; status?: string; search?: string }) => {
+    const searchParams = new URLSearchParams()
+    if (params?.category) searchParams.append('category', params.category)
+    if (params?.status) searchParams.append('status', params.status)
+    if (params?.search) searchParams.append('search', params.search)
+    const query = searchParams.toString()
+    return request<AgentListResponse>(`/agents${query ? `?${query}` : ''}`)
+  },
+
+  // 获取单个 Agent
+  getById: (id: string) => request<Agent>(`/agents/${id}`),
+
+  // 创建 Agent
+  create: (data: AgentCreate) =>
+    request<Agent>('/agents', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // 更新 Agent
+  update: (id: string, data: AgentUpdate) =>
+    request<Agent>(`/agents/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  // 删除 Agent
+  delete: (id: string) =>
+    request<{ status: string; message: string }>(`/agents/${id}`, {
+      method: 'DELETE',
+    }),
+
+  // 发布 Agent
+  publish: (id: string) =>
+    request<{ status: string; message: string }>(`/agents/${id}/publish`, {
+      method: 'POST',
+    }),
+
+  // 弃用 Agent
+  deprecate: (id: string) =>
+    request<{ status: string; message: string }>(`/agents/${id}/deprecate`, {
+      method: 'POST',
+    }),
+
+  // AI 生成提示词
+  generatePrompt: (name: string, description: string, category?: string) =>
+    request<{ status: string; prompt: string }>('/agents/generate/prompt', {
+      method: 'POST',
+      body: JSON.stringify({ name, description, category }),
+    }),
+
+  // AI 推荐工具
+  recommendTools: (description: string, category?: string) =>
+    request<{ status: string; tools: string[] }>('/agents/generate/tools', {
+      method: 'POST',
+      body: JSON.stringify({ description, category }),
+    }),
+
+  // AI 生成描述
+  generateDescription: (name: string) =>
+    request<{ status: string; description: string }>(`/agents/generate/description?name=${encodeURIComponent(name)}`, {
+      method: 'POST',
+    }),
+}
+
+// ============ Modules API (模块管理) ============
+
+export interface ModuleDefinition {
+  type: string
+  name: string
+  description: string
+  category: 'core' | 'multi'
+  icon: string
+  color: string
+  config_schema?: Record<string, any>
+  default_config: Record<string, any>
+}
+
+export interface ModuleStatusResponse {
+  module_type: string
+  status: string
+  enabled: boolean
+  config: Record<string, any>
+}
+
+export interface ModuleConfigUpdate {
+  enabled?: boolean
+  settings?: Record<string, any>
+}
+
+export interface ModuleMetricsResponse {
+  module_type: string
+  status: string
+  total_calls: number
+  success_count: number
+  error_count: number
+  avg_latency_ms: number
+  max_latency_ms: number
+  last_activity: string | null
+  started_at: string | null
+  extra: Record<string, any>
+}
+
+export interface AgentModulesResponse {
+  agent_id: string
+  modules: Record<string, ModuleStatusResponse>
+}
+
+export const modulesApi = {
+  // 获取所有模块定义
+  getAll: () => request<ModuleDefinition[]>('/modules'),
+
+  // 获取核心模块定义
+  getCoreModules: () => request<ModuleDefinition[]>('/modules/core'),
+
+  // 获取多 Agent 模块定义
+  getMultiModules: () => request<ModuleDefinition[]>('/modules/multi'),
+
+  // 获取单个模块定义
+  getById: (moduleType: string) => request<ModuleDefinition>(`/modules/${moduleType}`),
+
+  // 获取模块配置 Schema
+  getConfigSchema: (moduleType: string) => request<any>(`/modules/${moduleType}/schema`),
+
+  // 获取 Agent 的所有模块配置
+  getAgentModules: (agentId: string) =>
+    request<AgentModulesResponse>(`/modules/agents/${agentId}`),
+
+  // 获取 Agent 的单个模块配置
+  getAgentModule: (agentId: string, moduleType: string) =>
+    request<ModuleStatusResponse>(`/modules/agents/${agentId}/${moduleType}`),
+
+  // 更新 Agent 的模块配置
+  updateAgentModule: (agentId: string, moduleType: string, data: ModuleConfigUpdate) =>
+    request<ModuleStatusResponse>(`/modules/agents/${agentId}/${moduleType}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  // 获取模块运行指标
+  getAgentModuleMetrics: (agentId: string, moduleType: string) =>
+    request<ModuleMetricsResponse>(`/modules/agents/${agentId}/${moduleType}/metrics`),
+
+  // 启用模块
+  enableModule: (agentId: string, moduleType: string) =>
+    request<{ status: string; message: string }>(`/modules/agents/${agentId}/${moduleType}/enable`, {
+      method: 'POST',
+    }),
+
+  // 禁用模块
+  disableModule: (agentId: string, moduleType: string) =>
+    request<{ status: string; message: string }>(`/modules/agents/${agentId}/${moduleType}/disable`, {
+      method: 'POST',
+    }),
+
+  // 重置模块配置
+  resetModule: (agentId: string, moduleType: string) =>
+    request<{ status: string; message: string }>(`/modules/agents/${agentId}/${moduleType}/reset`, {
+      method: 'POST',
+    }),
+}
+
 // Export all APIs
 export default {
   skills: skillsApi,
   agent: agentApi,
+  agents: agentsApi,
   workflows: workflowsApi,
   executions: executionsApi,
   favorites: favoritesApi,
   dataNotes: dataNotesApi,
   chatSessions: chatSessionsApi,
+  modules: modulesApi,
 }

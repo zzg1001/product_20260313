@@ -3144,13 +3144,13 @@ const pptxgen = require("pptxgenjs");
             },
             {
                 "name": "read",
-                "description": "读取文件内容。",
+                "description": "读取文件内容。支持读取 uploads/ 目录（上传的文件）、outputs/ 目录（生成的文件）以及技能文件夹中的文件（如 SKILL.md 中引用的 editing.md、pptxgenjs.md 等）。对于技能文件夹中的文件，直接使用相对路径即可（如 editing.md）。",
                 "input_schema": {
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "文件路径"
+                            "description": "文件路径。可以是相对路径（如 editing.md）或带目录前缀的路径（如 uploads/xxx.xlsx）"
                         }
                     },
                     "required": ["path"]
@@ -3158,15 +3158,21 @@ const pptxgen = require("pptxgenjs");
             }
         ]
 
-    async def _execute_tool(self, tool_name: str, params: Dict) -> Dict:
-        """执行工具并返回结果"""
+    async def _execute_tool(self, tool_name: str, params: Dict, skill_folder: Path = None) -> Dict:
+        """执行工具并返回结果
+
+        Args:
+            tool_name: 工具名称
+            params: 工具参数
+            skill_folder: 当前技能的文件夹路径（用于解析技能内相对路径）
+        """
         import subprocess
         import shutil
         import asyncio
         import time
 
         try:
-            print(f"[_execute_tool] 执行工具: {tool_name}, 参数: {str(params)[:200]}")
+            print(f"[_execute_tool] 执行工具: {tool_name}, 参数: {str(params)[:200]}, skill_folder: {skill_folder}")
 
             if tool_name == "write":
                 # 写入文件
@@ -3473,7 +3479,24 @@ const pptxgen = require("pptxgenjs");
                         filepath = test_path
                         print(f"[_execute_tool] read: 在 outputs 找到文件 (去掉 outputs/ 前缀)")
 
-                # 4. 绝对路径
+                # 4. 技能文件夹（用于读取 SKILL.md 中引用的相对路径文件）
+                if not filepath and skill_folder:
+                    # 直接使用相对路径
+                    test_path = skill_folder / path
+                    if test_path.exists():
+                        filepath = test_path
+                        print(f"[_execute_tool] read: 在技能文件夹找到文件: {test_path}")
+
+                    # 也尝试常见的子目录
+                    if not filepath:
+                        for subdir in ["scripts", "reference", "templates"]:
+                            test_path = skill_folder / subdir / path
+                            if test_path.exists():
+                                filepath = test_path
+                                print(f"[_execute_tool] read: 在技能文件夹/{subdir} 找到文件: {test_path}")
+                                break
+
+                # 5. 绝对路径
                 if not filepath:
                     test_path = Path(path)
                     if test_path.exists():
@@ -3481,7 +3504,8 @@ const pptxgen = require("pptxgenjs");
                         print(f"[_execute_tool] read: 使用绝对路径")
 
                 if not filepath:
-                    print(f"[_execute_tool] read: 文件不存在, 尝试过的路径: OUTPUTS_DIR/{path}, UPLOADS_DIR/{path}, {path}")
+                    skill_hint = f", 技能文件夹/{path}" if skill_folder else ""
+                    print(f"[_execute_tool] read: 文件不存在, 尝试过的路径: OUTPUTS_DIR/{path}, UPLOADS_DIR/{path}{skill_hint}, {path}")
                     return {"success": False, "output": f"文件不存在: {path}\n提示: 上传的文件在 uploads/ 目录, 生成的文件在 outputs/ 目录"}
 
                 # 根据文件类型选择读取方式
@@ -3583,6 +3607,9 @@ const pptxgen = require("pptxgenjs");
         if not skill:
             yield json.dumps({"type": "error", "message": "技能不存在"})
             return
+
+        # 获取技能文件夹路径（用于解析技能内相对路径文件）
+        skill_folder = SKILLS_STORAGE_DIR / skill.folder_path if skill.folder_path else None
 
         # ===== 快速模式：检查 config.json 中的 exec_mode =====
         exec_mode = "ai"  # 默认 AI 模式
@@ -3816,7 +3843,7 @@ df.to_excel("{outputs_path}/output.xlsx", index=False)
                 })
                 await asyncio.sleep(0)
 
-                result = await self._execute_tool(tool_name, tool_params)
+                result = await self._execute_tool(tool_name, tool_params, skill_folder)
                 print(f"[Agent Loop] 工具执行结果: success={result.get('success')}, output_file={result.get('output_file')}")
 
                 yield json.dumps({

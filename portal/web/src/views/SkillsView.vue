@@ -37,7 +37,7 @@ interface Workflow {
 }
 
 const route = useRoute()
-const activeTab = ref<'skills' | 'agent' | 'workflows'>('agent')
+const activeTab = ref<'skills' | 'agent' | 'workflows' | 'agents' | 'monitor'>('agent')
 
 // 从首页跳转时隐藏侧边栏
 const hideSidebar = computed(() => route.query.from === 'home')
@@ -216,6 +216,43 @@ const loadSkills = async () => {
 // Workflows 数据（从 API 加载）
 const workflows = ref<Workflow[]>([])
 const isLoadingWorkflows = ref(false)
+
+// ============ Agents 数据 ============
+const sampleAgents = ref([
+  { id: '1', name: '智能写作助手', description: '帮助撰写各类文档、邮件、报告', icon: '✍️', status: 'active', capabilities: ['文档撰写', '内容优化', '格式转换'] },
+  { id: '2', name: '数据分析专家', description: '分析 Excel、CSV 数据，生成图表', icon: '📊', status: 'active', capabilities: ['数据清洗', '统计分析', '图表生成'] },
+  { id: '3', name: '代码生成器', description: '根据需求描述生成代码', icon: '💻', status: 'active', capabilities: ['代码生成', '代码审查', '单元测试'] },
+  { id: '4', name: 'PDF 处理专家', description: '提取 PDF 内容、转换格式', icon: '📄', status: 'draft', capabilities: ['PDF提取', '格式转换'] },
+])
+
+const openAgentStudio = () => {
+  // TODO: 打开 Agent 编辑器
+  alert('Agent Studio 开发中...')
+}
+
+const useAgent = (agent: any) => {
+  activeTab.value = 'agent'
+  // TODO: 设置当前使用的 Agent
+}
+
+const editAgent = (agent: any) => {
+  // TODO: 编辑 Agent
+  alert(`编辑 Agent: ${agent.name}`)
+}
+
+// ============ Monitor 数据 ============
+const monitorStats = ref({
+  totalExecutions: 1247,
+  successRate: 94.5,
+  avgDuration: 3.2
+})
+
+const executionLogs = ref([
+  { id: '1', icon: '📊', name: '数据分析专家', task: 'Excel 数据转换', status: 'success', statusText: '成功', time: '10:30' },
+  { id: '2', icon: '💻', name: '代码生成器', task: '生成 Python 脚本', status: 'running', statusText: '运行中', time: '10:32' },
+  { id: '3', icon: '✍️', name: '智能写作助手', task: '撰写产品文档', status: 'success', statusText: '成功', time: '10:25' },
+  { id: '4', icon: '📄', name: 'PDF 处理专家', task: '提取 PDF 表格', status: 'failed', statusText: '失败', time: '10:20' },
+])
 
 // Workflow tooltip 状态
 const wfTooltip = ref<{
@@ -1199,16 +1236,24 @@ onUnmounted(() => {
         </div>
         <div class="nav-tabs">
           <button class="nav-btn" :class="{ active: activeTab === 'agent' }" @click="activeTab = 'agent'">
-            <span class="nav-icon">🤖</span>
-            <span class="nav-label">Agent</span>
+            <span class="nav-icon">💬</span>
+            <span class="nav-label">对话</span>
           </button>
           <button class="nav-btn" :class="{ active: activeTab === 'skills' }" @click="activeTab = 'skills'">
             <span class="nav-icon">⚡</span>
-            <span class="nav-label">Skills</span>
+            <span class="nav-label">技能</span>
           </button>
           <button class="nav-btn" :class="{ active: activeTab === 'workflows' }" @click="activeTab = 'workflows'">
             <span class="nav-icon">🔄</span>
-            <span class="nav-label">Flows</span>
+            <span class="nav-label">流程</span>
+          </button>
+          <button class="nav-btn" :class="{ active: activeTab === 'agents' }" @click="activeTab = 'agents'">
+            <span class="nav-icon">🤖</span>
+            <span class="nav-label">Agents</span>
+          </button>
+          <button class="nav-btn" :class="{ active: activeTab === 'monitor' }" @click="activeTab = 'monitor'">
+            <span class="nav-icon">📊</span>
+            <span class="nav-label">监控</span>
           </button>
         </div>
         <div class="nav-spacer"></div>
@@ -1434,6 +1479,72 @@ onUnmounted(() => {
                   <span class="wf-add-icon">+</span>
                   <span class="wf-add-text">新建工作流</span>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Agents 管理区域 -->
+        <div v-show="activeTab === 'agents'" class="agents-area">
+          <div class="agents-header">
+            <div class="agents-title-row">
+              <h2>Agent 市场</h2>
+              <button class="btn-create-agent" @click="openAgentStudio()">
+                <span>+</span> 创建 Agent
+              </button>
+            </div>
+            <p class="agents-desc">发现和管理智能 Agent</p>
+          </div>
+          <div class="agents-grid">
+            <div v-for="agent in sampleAgents" :key="agent.id" class="agent-card">
+              <div class="agent-card-header">
+                <span class="agent-icon">{{ agent.icon }}</span>
+                <span :class="['agent-status', agent.status]">{{ agent.status === 'active' ? '已发布' : '草稿' }}</span>
+              </div>
+              <h3 class="agent-name">{{ agent.name }}</h3>
+              <p class="agent-desc">{{ agent.description }}</p>
+              <div class="agent-tags">
+                <span v-for="cap in agent.capabilities.slice(0, 3)" :key="cap" class="agent-tag">{{ cap }}</span>
+              </div>
+              <div class="agent-card-actions">
+                <button class="btn-use-agent" @click="useAgent(agent)">使用</button>
+                <button class="btn-edit-agent" @click="editAgent(agent)">编辑</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 监控区域 -->
+        <div v-show="activeTab === 'monitor'" class="monitor-area">
+          <div class="monitor-header">
+            <h2>执行监控</h2>
+            <p class="monitor-desc">实时监控 Agent 执行状态</p>
+          </div>
+          <div class="monitor-stats">
+            <div class="monitor-stat">
+              <span class="stat-value">{{ monitorStats.totalExecutions }}</span>
+              <span class="stat-label">总执行</span>
+            </div>
+            <div class="monitor-stat">
+              <span class="stat-value">{{ monitorStats.successRate }}%</span>
+              <span class="stat-label">成功率</span>
+            </div>
+            <div class="monitor-stat">
+              <span class="stat-value">{{ monitorStats.avgDuration }}s</span>
+              <span class="stat-label">平均耗时</span>
+            </div>
+          </div>
+          <div class="monitor-logs">
+            <h3>执行日志</h3>
+            <div class="logs-list">
+              <div v-for="log in executionLogs" :key="log.id" class="log-item">
+                <span class="log-icon">{{ log.icon }}</span>
+                <div class="log-info">
+                  <span class="log-name">{{ log.name }}</span>
+                  <span class="log-task">{{ log.task }}</span>
+                </div>
+                <span :class="['log-status', log.status]">{{ log.statusText }}</span>
+                <span class="log-time">{{ log.time }}</span>
               </div>
             </div>
           </div>
@@ -4026,5 +4137,294 @@ onUnmounted(() => {
 .wf-tooltip-leave-to {
   opacity: 0;
   transform: scale(0.95);
+}
+
+/* ============ Agents 区域样式 ============ */
+.agents-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.agents-header {
+  margin-bottom: 24px;
+}
+
+.agents-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.agents-header h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0;
+}
+
+.agents-desc {
+  font-size: 14px;
+  color: #64748b;
+  margin: 0;
+}
+
+.btn-create-agent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-create-agent:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.agent-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px;
+  transition: all 0.2s;
+}
+
+.agent-card:hover {
+  border-color: #c7d2fe;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+}
+
+.agent-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.agent-icon {
+  font-size: 28px;
+}
+
+.agent-status {
+  padding: 3px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.agent-status.active {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.agent-status.draft {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.agent-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0 0 6px;
+}
+
+.agent-desc {
+  font-size: 13px;
+  color: #64748b;
+  margin: 0 0 12px;
+  line-height: 1.4;
+}
+
+.agent-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.agent-tag {
+  padding: 3px 8px;
+  background: #f1f5f9;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.agent-card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-use-agent {
+  flex: 1;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btn-edit-agent {
+  padding: 8px 12px;
+  background: #fff;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.btn-edit-agent:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+/* ============ Monitor 区域样式 ============ */
+.monitor-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.monitor-header {
+  margin-bottom: 20px;
+}
+
+.monitor-header h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0 0 6px;
+}
+
+.monitor-desc {
+  font-size: 14px;
+  color: #64748b;
+  margin: 0;
+}
+
+.monitor-stats {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.monitor-stat {
+  flex: 1;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  border-radius: 12px;
+  padding: 16px;
+  text-align: center;
+  color: white;
+}
+
+.monitor-stat .stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  display: block;
+}
+
+.monitor-stat .stat-label {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.monitor-logs {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.monitor-logs h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0 0 16px;
+}
+
+.logs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.log-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: #f8fafc;
+  border-radius: 8px;
+}
+
+.log-icon {
+  font-size: 20px;
+}
+
+.log-info {
+  flex: 1;
+}
+
+.log-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #1e293b;
+  display: block;
+}
+
+.log-task {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.log-status {
+  padding: 4px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.log-status.success {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.log-status.running {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.log-status.failed {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.log-time {
+  font-size: 12px;
+  color: #94a3b8;
 }
 </style>

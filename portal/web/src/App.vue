@@ -3,11 +3,13 @@ import { ref } from 'vue'
 import { RouterView } from 'vue-router'
 import LogPanel from '@/components/common/LogPanel.vue'
 import DataNotesTab from '@/components/common/DataNotesTab.vue'
+import GlobalNav from '@/components/common/GlobalNav.vue'
 
 const showLogPanel = ref(false)
 </script>
 
 <template>
+  <GlobalNav />
   <RouterView />
   <LogPanel v-model:show="showLogPanel" />
   <DataNotesTab />
@@ -39,6 +41,8 @@ body {
 
 #app {
   height: 100%;
+  width: 100%;
+  overflow-x: hidden;
 }
 
 /* 滚动条样式 */
