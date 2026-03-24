@@ -182,7 +182,7 @@ export default {
       phone: '咨询热线',
       phoneValue: '021-12345678',
       email: '邮箱',
-      emailValue: 'contact@ikedata.com',
+      emailValue: "contact{'@'}ikedata.com",
       address: '地址',
       addressValue: '上海市浦东新区张江高科技园区'
     }

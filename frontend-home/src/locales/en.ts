@@ -182,7 +182,7 @@ export default {
       phone: 'Hotline',
       phoneValue: '+86 21-12345678',
       email: 'Email',
-      emailValue: 'contact@ikedata.com',
+      emailValue: "contact{'@'}ikedata.com",
       address: 'Address',
       addressValue: 'Zhangjiang Hi-Tech Park, Pudong, Shanghai'
     }
