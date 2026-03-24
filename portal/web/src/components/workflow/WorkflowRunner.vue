@@ -51,8 +51,8 @@ const phaseLabel = computed(() => {
   return labels[phase.value] || '未知'
 })
 
-// API base URL
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+// 静态文件 base URL（用于 /outputs 等静态资源）
+const SERVER_BASE = import.meta.env.VITE_SERVER_BASE_URL || '/portal-api'
 
 // 从 step.result 中提取 _output_file
 const getOutputFile = (step: CompletedStep) => {
@@ -68,9 +68,9 @@ const getOutputFile = (step: CompletedStep) => {
 const getOutputFileUrl = (step: CompletedStep) => {
   const outputFile = getOutputFile(step)
   if (!outputFile?.url) return ''
-  // 如果是相对路径，加上 API base URL
+  // 如果是相对路径，加上 Server base URL
   if (outputFile.url.startsWith('/')) {
-    return `${API_BASE}${outputFile.url}`
+    return `${SERVER_BASE}${outputFile.url}`
   }
   return outputFile.url
 }

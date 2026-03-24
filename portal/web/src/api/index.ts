@@ -71,6 +71,7 @@ export interface Skill {
   output_config: OutputConfig | null  // 输出文件配置
   author: string | null
   version: string | null
+  skill_md: string | null  // 技能 Markdown 文档
   status: 'active' | 'deprecated'  // 版本状态
   original_created_at: string  // 原始创建时间（用于排序）
   created_at: string
@@ -107,6 +108,7 @@ export interface SkillUpdate {
   output_config?: OutputConfig  // 输出文件配置
   author?: string
   version?: string
+  skill_md?: string  // 技能 Markdown 文档
   code?: string  // 更新脚本代码
   // 更新模式: overwrite=覆盖当前版本, new_version=创建新版本
   update_mode?: 'overwrite' | 'new_version'
@@ -511,8 +513,6 @@ export interface SkillExecuteInteractiveEvent {
     url: string
     size: number
   }
-  // For 'error'
-  message?: string
 }
 
 export const agentApi = {
